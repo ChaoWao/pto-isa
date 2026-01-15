@@ -146,6 +146,264 @@ def arm64_generate_tile_declaration(name: str, rows: int, cols: int, dtype: str 
 
 
 # =============================================================================
+# NVIDIA CUDA Code Generation Infrastructure
+# =============================================================================
+
+# CUDA scalar type mappings
+CUDA_TYPE_MAP = {
+    "f32": "float",
+    "f16": "__half",
+    "f64": "double",
+    "bf16": "__nv_bfloat16",
+    "i8": "int8_t",
+    "i16": "int16_t",
+    "i32": "int32_t",
+    "i64": "int64_t",
+    "u8": "uint8_t",
+    "u16": "uint16_t",
+    "u32": "uint32_t",
+    "u64": "uint64_t",
+}
+
+# CUDA vector type mappings (float4, half2, etc.)
+CUDA_VECTOR_TYPE_MAP = {
+    "f32": "float4",
+    "f16": "half2",
+    "f64": "double2",
+    "i32": "int4",
+    "u32": "uint4",
+}
+
+# Elements per CUDA vector type
+CUDA_VECTOR_LANES = {
+    "f32": 4,
+    "f16": 2,
+    "f64": 2,
+    "i32": 4,
+    "u32": 4,
+}
+
+# CUDA math intrinsics
+CUDA_INTRINSICS = {
+    "exp": {"f32": "__expf", "f64": "exp", "f16": "hexp"},
+    "log": {"f32": "__logf", "f64": "log", "f16": "hlog"},
+    "sqrt": {"f32": "__fsqrt_rn", "f64": "sqrt", "f16": "hsqrt"},
+    "rsqrt": {"f32": "__frsqrt_rn", "f64": "rsqrt", "f16": "hrsqrt"},
+    "sin": {"f32": "__sinf", "f64": "sin", "f16": "hsin"},
+    "cos": {"f32": "__cosf", "f64": "cos", "f16": "hcos"},
+    "abs": {"f32": "fabsf", "f64": "fabs", "f16": "__habs"},
+    "max": {"f32": "fmaxf", "f64": "fmax", "f16": "__hmax"},
+    "min": {"f32": "fminf", "f64": "fmin", "f16": "__hmin"},
+}
+
+
+@dataclass
+class CUDACodeGenContext:
+    """
+    Context for NVIDIA CUDA code generation.
+    
+    Tracks state during code generation including indentation level,
+    temporary variable counters, thread block configuration, and shared memory.
+    """
+    indent_level: int = 0
+    temp_counter: int = 0
+    var_counter: int = 0
+    declared_vars: set = None
+    block_dim_x: int = 32   # Warp size
+    block_dim_y: int = 8    # Typical tile row parallelism
+    use_shared_memory: bool = True
+    
+    def __post_init__(self):
+        if self.declared_vars is None:
+            self.declared_vars = set()
+    
+    def get_temp(self, prefix: str = "tmp") -> str:
+        """Get a unique temporary variable name."""
+        name = f"{prefix}_{self.temp_counter}"
+        self.temp_counter += 1
+        return name
+    
+    def get_unique_var(self, prefix: str = "_cv") -> str:
+        """Get a unique variable name."""
+        name = f"{prefix}{self.var_counter}"
+        self.var_counter += 1
+        return name
+    
+    def indent(self) -> str:
+        """Get current indentation string (4 spaces per level)."""
+        return "    " * self.indent_level
+    
+    def reset(self):
+        """Reset the context to initial state."""
+        self.indent_level = 0
+        self.temp_counter = 0
+        self.var_counter = 0
+        self.declared_vars = set()
+
+
+def cuda_generate_header() -> str:
+    """Generate standard CUDA header includes."""
+    return """// Auto-generated CUDA code from PTO ISA Compiler
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+#include <mma.h>
+#include <cooperative_groups.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+
+namespace cg = cooperative_groups;
+"""
+
+
+def cuda_generate_tile_declaration(name: str, rows: int, cols: int, dtype: str = "f32", 
+                                    shared: bool = False) -> str:
+    """Generate CUDA declaration for a tile."""
+    c_type = CUDA_TYPE_MAP.get(dtype, "float")
+    if shared:
+        return f"__shared__ {c_type} {name}[{rows}][{cols}];"
+    return f"{c_type} {name}[{rows}][{cols}];"
+
+
+def cuda_get_intrinsic(op: str, dtype: str) -> str:
+    """Get CUDA intrinsic function for an operation and data type."""
+    if op in CUDA_INTRINSICS and dtype in CUDA_INTRINSICS[op]:
+        return CUDA_INTRINSICS[op][dtype]
+    return f"{op}f" if dtype == "f32" else op
+
+
+# =============================================================================
+# Huawei Ascend 910B Code Generation Infrastructure (Ascend C)
+# =============================================================================
+
+# Ascend C scalar type mappings
+ASCEND_TYPE_MAP = {
+    "f32": "float",
+    "f16": "half",
+    "f64": "double",
+    "bf16": "bfloat16_t",
+    "i8": "int8_t",
+    "i16": "int16_t",
+    "i32": "int32_t",
+    "i64": "int64_t",
+    "u8": "uint8_t",
+    "u16": "uint16_t",
+    "u32": "uint32_t",
+    "u64": "uint64_t",
+}
+
+# Ascend vector type mappings (LocalTensor)
+ASCEND_VECTOR_LANES = {
+    "f32": 8,    # 256-bit vector / 32-bit
+    "f16": 16,   # 256-bit vector / 16-bit
+    "bf16": 16,
+    "i32": 8,
+    "i8": 32,
+    "u8": 32,
+}
+
+# Ascend C memory spaces
+ASCEND_MEMORY_SPACE = {
+    "gm": "GM",        # Global Memory
+    "l2": "L2",        # L2 Cache
+    "l1": "L1",        # L1 Cache
+    "ub": "UB",        # Unified Buffer (on-chip SRAM)
+    "l0a": "L0A",      # L0 Matrix A buffer
+    "l0b": "L0B",      # L0 Matrix B buffer
+    "l0c": "L0C",      # L0 Matrix C buffer (accumulator)
+}
+
+# Ascend C vector operations mapping
+ASCEND_VECTOR_OPS = {
+    "add": "Add",
+    "sub": "Sub",
+    "mul": "Mul",
+    "div": "Div",
+    "max": "Max",
+    "min": "Min",
+    "abs": "Abs",
+    "neg": "Neg",
+    "exp": "Exp",
+    "log": "Ln",
+    "sqrt": "Sqrt",
+    "rsqrt": "Rsqrt",
+    "recip": "Reciprocal",
+    "relu": "Relu",
+}
+
+
+@dataclass
+class AscendCodeGenContext:
+    """
+    Context for Huawei Ascend 910B code generation (Ascend C).
+    
+    Ascend 910B uses Ascend C programming model with:
+    - DataCopy for memory transfers
+    - Vector operations for elementwise ops
+    - Cube operations for matrix multiplication
+    - Pipe-based synchronization
+    """
+    indent_level: int = 0
+    temp_counter: int = 0
+    var_counter: int = 0
+    declared_vars: set = None
+    block_dim: int = 8     # Typical AI Core count per task
+    tile_size: int = 256   # Elements per vector operation
+    use_double_buffer: bool = True  # Pipeline optimization
+    
+    def __post_init__(self):
+        if self.declared_vars is None:
+            self.declared_vars = set()
+    
+    def get_temp(self, prefix: str = "tmp") -> str:
+        """Get a unique temporary variable name."""
+        name = f"{prefix}_{self.temp_counter}"
+        self.temp_counter += 1
+        return name
+    
+    def get_unique_var(self, prefix: str = "_av") -> str:
+        """Get a unique variable name."""
+        name = f"{prefix}{self.var_counter}"
+        self.var_counter += 1
+        return name
+    
+    def indent(self) -> str:
+        """Get current indentation string (4 spaces per level)."""
+        return "    " * self.indent_level
+    
+    def reset(self):
+        """Reset the context to initial state."""
+        self.indent_level = 0
+        self.temp_counter = 0
+        self.var_counter = 0
+        self.declared_vars = set()
+
+
+def ascend_generate_header() -> str:
+    """Generate standard Ascend C header includes."""
+    return """// Auto-generated Ascend C code from PTO ISA Compiler
+// Target: Huawei Ascend 910B (Da Vinci Architecture)
+#include "kernel_operator.h"
+
+using namespace AscendC;
+"""
+
+
+def ascend_generate_tile_declaration(name: str, rows: int, cols: int, dtype: str = "f32",
+                                      memory_space: str = "ub") -> str:
+    """Generate Ascend C declaration for a tile (LocalTensor)."""
+    ascend_type = ASCEND_TYPE_MAP.get(dtype, "float")
+    total_size = rows * cols
+    return f"LocalTensor<{ascend_type}> {name};  // {rows}x{cols} = {total_size} elements"
+
+
+def ascend_get_vector_op(op: str) -> str:
+    """Get Ascend C vector operation name."""
+    return ASCEND_VECTOR_OPS.get(op, op.capitalize())
+
+
+# =============================================================================
 # Loop IR - Intermediate Representation for Loop Structures
 # =============================================================================
 
@@ -571,6 +829,236 @@ class TileLoopCodeGen:
 
 
 # =============================================================================
+# Loop IR for CUDA - Code Generator
+# =============================================================================
+
+class CUDATileLoopCodeGen:
+    """
+    Code generator that converts TileLoopIR to CUDA kernel code.
+    
+    This class handles:
+    - Thread block mapping to tile dimensions
+    - Shared memory optimization
+    - Warp-level primitives
+    """
+    
+    def __init__(self, ctx: CUDACodeGenContext = None):
+        self.ctx = ctx or CUDACodeGenContext()
+    
+    def generate(self, ir) -> List[str]:
+        """Generate CUDA code from an IR object."""
+        if isinstance(ir, TileLoopIR):
+            return self._generate_tile_loop(ir)
+        elif isinstance(ir, NonLoopIR):
+            return ir.code_lines
+        elif isinstance(ir, list):
+            return ir
+        else:
+            return [f"// Unknown IR type: {type(ir)}"]
+    
+    def _generate_tile_loop(self, loop: TileLoopIR) -> List[str]:
+        """Generate CUDA code for a TileLoopIR."""
+        lines = []
+        indent = self.ctx.indent()
+        rows, cols, dtype = loop.rows, loop.cols, loop.dtype
+        c_type = CUDA_TYPE_MAP.get(dtype, "float")
+        
+        # Comment showing what's in this fused loop
+        if len(loop.bodies) > 1:
+            ops_desc = ", ".join(f"{b.dst}={b.op_type.value}" for b in loop.bodies)
+            lines.append(f"{indent}// CUDA fused loop ({len(loop.bodies)} ops): {ops_desc}")
+        else:
+            b = loop.bodies[0]
+            lines.append(f"{indent}// CUDA: {b.op_type.value.upper()}: {b}")
+        
+        # Use thread-level parallelism
+        lines.append(f"{indent}// Thread mapping: each thread handles one element")
+        lines.append(f"{indent}int _row = threadIdx.y + blockIdx.y * blockDim.y;")
+        lines.append(f"{indent}int _col = threadIdx.x + blockIdx.x * blockDim.x;")
+        lines.append(f"{indent}if (_row < {rows} && _col < {cols}) {{")
+        self.ctx.indent_level += 1
+        
+        # Generate operations for each body
+        for body in loop.bodies:
+            op_line = self._generate_cuda_op(body, dtype)
+            lines.append(f"{self.ctx.indent()}{op_line}")
+        
+        self.ctx.indent_level -= 1
+        lines.append(f"{indent}}}")
+        
+        return lines
+    
+    def _generate_cuda_op(self, body: LoopBodyOp, dtype: str) -> str:
+        """Generate a single CUDA operation."""
+        op = body.op_type
+        dst = f"{body.dst}[_row][_col]"
+        
+        if len(body.srcs) >= 1:
+            src0 = f"{body.srcs[0]}[_row][_col]"
+        if len(body.srcs) >= 2:
+            src1 = f"{body.srcs[1]}[_row][_col]"
+        
+        if op == LoopOpType.ADD:
+            return f"{dst} = {src0} + {src1};"
+        elif op == LoopOpType.SUB:
+            return f"{dst} = {src0} - {src1};"
+        elif op == LoopOpType.MUL:
+            return f"{dst} = {src0} * {src1};"
+        elif op == LoopOpType.DIV:
+            return f"{dst} = {src0} / {src1};"
+        elif op == LoopOpType.MAX:
+            return f"{dst} = {cuda_get_intrinsic('max', dtype)}({src0}, {src1});"
+        elif op == LoopOpType.MIN:
+            return f"{dst} = {cuda_get_intrinsic('min', dtype)}({src0}, {src1});"
+        elif op == LoopOpType.ABS:
+            return f"{dst} = {cuda_get_intrinsic('abs', dtype)}({src0});"
+        elif op == LoopOpType.NEG:
+            return f"{dst} = -{src0};"
+        elif op == LoopOpType.RECIP:
+            return f"{dst} = 1.0f / {src0};"
+        elif op == LoopOpType.EXP:
+            return f"{dst} = {cuda_get_intrinsic('exp', dtype)}({src0});"
+        elif op == LoopOpType.LOG:
+            return f"{dst} = {cuda_get_intrinsic('log', dtype)}({src0});"
+        elif op == LoopOpType.SQRT:
+            return f"{dst} = {cuda_get_intrinsic('sqrt', dtype)}({src0});"
+        elif op == LoopOpType.RSQRT:
+            return f"{dst} = {cuda_get_intrinsic('rsqrt', dtype)}({src0});"
+        elif op == LoopOpType.RELU:
+            return f"{dst} = {cuda_get_intrinsic('max', dtype)}({src0}, 0.0f);"
+        elif op == LoopOpType.ADDS:
+            return f"{dst} = {src0} + {body.scalar};"
+        elif op == LoopOpType.SUBS:
+            return f"{dst} = {src0} - {body.scalar};"
+        elif op == LoopOpType.MULS:
+            return f"{dst} = {src0} * {body.scalar};"
+        elif op == LoopOpType.DIVS:
+            return f"{dst} = {src0} / {body.scalar};"
+        elif op == LoopOpType.EXPANDS:
+            return f"{dst} = {body.scalar};"
+        elif op == LoopOpType.COPY:
+            return f"{dst} = {src0};"
+        
+        return f"// Unknown op: {op}"
+
+
+# =============================================================================
+# Loop IR for Ascend 910B - Code Generator
+# =============================================================================
+
+class AscendTileLoopCodeGen:
+    """
+    Code generator that converts TileLoopIR to Ascend C code.
+    
+    This class handles:
+    - Vector operation mapping
+    - Unified Buffer management
+    - Data flow pipe synchronization
+    """
+    
+    def __init__(self, ctx: AscendCodeGenContext = None):
+        self.ctx = ctx or AscendCodeGenContext()
+    
+    def generate(self, ir) -> List[str]:
+        """Generate Ascend C code from an IR object."""
+        if isinstance(ir, TileLoopIR):
+            return self._generate_tile_loop(ir)
+        elif isinstance(ir, NonLoopIR):
+            return ir.code_lines
+        elif isinstance(ir, list):
+            return ir
+        else:
+            return [f"// Unknown IR type: {type(ir)}"]
+    
+    def _generate_tile_loop(self, loop: TileLoopIR) -> List[str]:
+        """Generate Ascend C code for a TileLoopIR using vector operations."""
+        lines = []
+        indent = self.ctx.indent()
+        rows, cols, dtype = loop.rows, loop.cols, loop.dtype
+        total_elements = rows * cols
+        vec_lanes = ASCEND_VECTOR_LANES.get(dtype, 8)
+        ascend_type = ASCEND_TYPE_MAP.get(dtype, "float")
+        
+        # Comment showing what's in this fused loop
+        if len(loop.bodies) > 1:
+            ops_desc = ", ".join(f"{b.dst}={b.op_type.value}" for b in loop.bodies)
+            lines.append(f"{indent}// Ascend C fused vector ops ({len(loop.bodies)} ops): {ops_desc}")
+        else:
+            b = loop.bodies[0]
+            lines.append(f"{indent}// Ascend C: {b.op_type.value.upper()}: {b}")
+        
+        # Generate block-wise processing
+        lines.append(f"{indent}// Vector processing: {total_elements} elements, {vec_lanes} lanes")
+        lines.append(f"{indent}uint32_t _dataSize = {total_elements};")
+        lines.append(f"{indent}uint32_t _tileLength = {vec_lanes};")
+        lines.append(f"{indent}uint32_t _loopCount = (_dataSize + _tileLength - 1) / _tileLength;")
+        lines.append(f"")
+        lines.append(f"{indent}for (uint32_t _i = 0; _i < _loopCount; _i++) {{")
+        self.ctx.indent_level += 1
+        indent = self.ctx.indent()
+        
+        lines.append(f"{indent}uint32_t _offset = _i * _tileLength;")
+        lines.append(f"{indent}uint32_t _calcLen = (_offset + _tileLength <= _dataSize) ? _tileLength : (_dataSize - _offset);")
+        
+        # Generate operations for each body using Ascend C vector APIs
+        for body in loop.bodies:
+            op_lines = self._generate_ascend_op(body, dtype)
+            for op_line in op_lines:
+                lines.append(f"{indent}{op_line}")
+        
+        self.ctx.indent_level -= 1
+        indent = self.ctx.indent()
+        lines.append(f"{indent}}}")
+        
+        return lines
+    
+    def _generate_ascend_op(self, body: LoopBodyOp, dtype: str) -> List[str]:
+        """Generate Ascend C vector operations."""
+        lines = []
+        op = body.op_type
+        dst = body.dst
+        ascend_op = ascend_get_vector_op(op.value)
+        
+        if len(body.srcs) >= 1:
+            src0 = body.srcs[0]
+        if len(body.srcs) >= 2:
+            src1 = body.srcs[1]
+        
+        # Binary operations
+        if op in (LoopOpType.ADD, LoopOpType.SUB, LoopOpType.MUL, LoopOpType.DIV,
+                  LoopOpType.MAX, LoopOpType.MIN):
+            lines.append(f"{ascend_op}({dst}[_offset], {src0}[_offset], {src1}[_offset], _calcLen);")
+        
+        # Unary operations
+        elif op in (LoopOpType.ABS, LoopOpType.NEG, LoopOpType.EXP, LoopOpType.LOG,
+                    LoopOpType.SQRT, LoopOpType.RSQRT, LoopOpType.RECIP, LoopOpType.RELU):
+            lines.append(f"{ascend_op}({dst}[_offset], {src0}[_offset], _calcLen);")
+        
+        # Scalar operations
+        elif op in (LoopOpType.ADDS, LoopOpType.SUBS, LoopOpType.MULS, LoopOpType.DIVS):
+            scalar_op_map = {
+                LoopOpType.ADDS: "Adds",
+                LoopOpType.SUBS: "Subs",
+                LoopOpType.MULS: "Muls",
+                LoopOpType.DIVS: "Divs",
+            }
+            lines.append(f"{scalar_op_map[op]}({dst}[_offset], {src0}[_offset], {body.scalar}, _calcLen);")
+        
+        # Broadcast
+        elif op == LoopOpType.EXPANDS:
+            lines.append(f"Duplicate({dst}[_offset], {body.scalar}, _calcLen);")
+        
+        # Copy
+        elif op == LoopOpType.COPY:
+            lines.append(f"DataCopy({dst}[_offset], {src0}[_offset], _calcLen);")
+        
+        else:
+            lines.append(f"// Unknown op: {op}")
+        
+        return lines
+
+
+# =============================================================================
 # Data Types
 # =============================================================================
 
@@ -803,6 +1291,80 @@ class PTOInstruction(ABC):
         ir = self.codegen_arm64_ir(ctx)
         codegen = TileLoopCodeGen(ctx)
         return codegen.generate(ir)
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> CodeGenIR:
+        """
+        Generate CUDA intermediate representation for this instruction.
+        
+        Returns a TileLoopIR for elementwise operations that can be fused,
+        or NonLoopIR/List[str] for other operations.
+        
+        Args:
+            ctx: CUDA code generation context for tracking state
+            
+        Returns:
+            CodeGenIR (TileLoopIR, NonLoopIR, or List[str])
+        """
+        # Default: return non-loop IR with a comment
+        return NonLoopIR(
+            op_type="unknown",
+            code_lines=[f"{ctx.indent()}// CUDA: {self.opcode}: Not implemented"],
+            comment=self.opcode
+        )
+    
+    def codegen_cuda(self, ctx: CUDACodeGenContext) -> List[str]:
+        """
+        Generate NVIDIA CUDA code for this instruction.
+        
+        This method generates IR first, then converts to CUDA C code.
+        Uses CUDA thread-level parallelism and intrinsics.
+        
+        Args:
+            ctx: CUDA code generation context for tracking state
+            
+        Returns:
+            List of CUDA code lines implementing this instruction
+        """
+        ir = self.codegen_cuda_ir(ctx)
+        codegen = CUDATileLoopCodeGen(ctx)
+        return codegen.generate(ir)
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> CodeGenIR:
+        """
+        Generate Ascend 910B intermediate representation for this instruction.
+        
+        Returns a TileLoopIR for elementwise operations that can be fused,
+        or NonLoopIR/List[str] for other operations.
+        
+        Args:
+            ctx: Ascend code generation context for tracking state
+            
+        Returns:
+            CodeGenIR (TileLoopIR, NonLoopIR, or List[str])
+        """
+        # Default: return non-loop IR with a comment
+        return NonLoopIR(
+            op_type="unknown",
+            code_lines=[f"{ctx.indent()}// Ascend 910B: {self.opcode}: Not implemented"],
+            comment=self.opcode
+        )
+    
+    def codegen_ascend_910b(self, ctx: AscendCodeGenContext) -> List[str]:
+        """
+        Generate Huawei Ascend 910B (Ascend C) code for this instruction.
+        
+        This method generates IR first, then converts to Ascend C code.
+        Uses Ascend C vector operations and DataCopy primitives.
+        
+        Args:
+            ctx: Ascend code generation context for tracking state
+            
+        Returns:
+            List of Ascend C code lines implementing this instruction
+        """
+        ir = self.codegen_ascend_910b_ir(ctx)
+        codegen = AscendTileLoopCodeGen(ctx)
+        return codegen.generate(ir)
 
 
 class TileInstruction(PTOInstruction):
@@ -994,8 +1556,8 @@ class TABS(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tabs {self.src} : {self.src.tile_type} -> {self.dst.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TABS."""
+    def _make_ir(self) -> TileLoopIR:
+        """Create architecture-agnostic TileLoopIR for TABS."""
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1007,6 +1569,18 @@ class TABS(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        """Generate TileLoopIR for TABS (ARM64)."""
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        """Generate TileLoopIR for TABS (CUDA)."""
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        """Generate TileLoopIR for TABS (Ascend 910B)."""
+        return self._make_ir()
 
 
 @dataclass
@@ -1022,8 +1596,8 @@ class TNEG(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tneg {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TNEG."""
+    def _make_ir(self) -> TileLoopIR:
+        """Create architecture-agnostic TileLoopIR."""
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1035,6 +1609,15 @@ class TNEG(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1064,8 +1647,7 @@ class TEXP(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = texp {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TEXP (no NEON intrinsic, uses scalar)."""
+    def _make_ir(self, vectorizable: bool = False) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1075,8 +1657,17 @@ class TEXP(TileInstruction):
                 dst=self.dst.name,
                 srcs=[self.src.name]
             )],
-            vectorizable=False  # exp() has no NEON intrinsic
+            vectorizable=vectorizable
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=False)  # exp() has no NEON intrinsic
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=True)  # CUDA has __expf
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=True)  # Ascend has Exp vector op
 
 
 @dataclass
@@ -1092,8 +1683,7 @@ class TLOG(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tlog {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TLOG (no NEON intrinsic, uses scalar)."""
+    def _make_ir(self, vectorizable: bool = False) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1103,8 +1693,17 @@ class TLOG(TileInstruction):
                 dst=self.dst.name,
                 srcs=[self.src.name]
             )],
-            vectorizable=False  # log() has no NEON intrinsic
+            vectorizable=vectorizable
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=False)  # log() has no NEON intrinsic
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=True)  # CUDA has __logf
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir(vectorizable=True)  # Ascend has Ln vector op
 
 
 @dataclass
@@ -1120,8 +1719,7 @@ class TSQRT(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tsqrt {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TSQRT."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1133,6 +1731,15 @@ class TSQRT(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1148,8 +1755,7 @@ class TRSQRT(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = trsqrt {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TRSQRT."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1161,6 +1767,15 @@ class TRSQRT(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1176,8 +1791,7 @@ class TRECIP(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = trecip {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TRECIP."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1189,6 +1803,15 @@ class TRECIP(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1204,8 +1827,7 @@ class TRELU(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = trelu {self.src} : {self.src.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TRELU."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1217,6 +1839,15 @@ class TRELU(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1252,8 +1883,7 @@ class TADD(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tadd {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TADD."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1266,6 +1896,15 @@ class TADD(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1282,8 +1921,7 @@ class TSUB(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tsub {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TSUB."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1295,6 +1933,15 @@ class TSUB(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1311,8 +1958,7 @@ class TMUL(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tmul {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TMUL."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1324,6 +1970,15 @@ class TMUL(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1340,8 +1995,7 @@ class TDIV(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tdiv {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TDIV."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1353,6 +2007,15 @@ class TDIV(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1384,8 +2047,7 @@ class TMAX(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tmax {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TMAX."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1397,6 +2059,15 @@ class TMAX(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1413,8 +2084,7 @@ class TMIN(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tmin {self.src0}, {self.src1} : {self.src0.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TMIN."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src0.tile_type.shape.rows,
             cols=self.src0.tile_type.shape.cols,
@@ -1426,6 +2096,15 @@ class TMIN(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 # Bitwise operations
@@ -1522,8 +2201,7 @@ class TADDS(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tadds {self.src}, {self.scalar} : {self.src.tile_type}, {self.scalar.element_type.value}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TADDS."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1536,6 +2214,15 @@ class TADDS(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1567,8 +2254,7 @@ class TMULS(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tmuls {self.src}, {self.scalar} : {self.src.tile_type}, {self.scalar.element_type.value}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TMULS."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1581,6 +2267,15 @@ class TMULS(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -1597,8 +2292,7 @@ class TDIVS(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = tdivs {self.src}, {self.scalar} : {self.src.tile_type}, {self.scalar.element_type.value}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TDIVS."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.src.tile_type.shape.rows,
             cols=self.src.tile_type.shape.cols,
@@ -1611,6 +2305,15 @@ class TDIVS(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass
@@ -2078,8 +2781,7 @@ class TEXPANDS(TileInstruction):
     def to_pto_as(self) -> str:
         return f"{self.dst} = texpands {self.scalar} : {self.scalar.element_type.value}, {self.dst.tile_type}"
     
-    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
-        """Generate TileLoopIR for TEXPANDS."""
+    def _make_ir(self) -> TileLoopIR:
         return TileLoopIR(
             rows=self.dst.tile_type.shape.rows,
             cols=self.dst.tile_type.shape.cols,
@@ -2092,6 +2794,15 @@ class TEXPANDS(TileInstruction):
             )],
             vectorizable=True
         )
+    
+    def codegen_arm64_ir(self, ctx: ARM64CodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_cuda_ir(self, ctx: CUDACodeGenContext) -> TileLoopIR:
+        return self._make_ir()
+    
+    def codegen_ascend_910b_ir(self, ctx: AscendCodeGenContext) -> TileLoopIR:
+        return self._make_ir()
 
 
 @dataclass

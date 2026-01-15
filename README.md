@@ -10,139 +10,106 @@ The PTO ISA operates on **Tiles** - 2-dimensional blocks of data representing te
 - **DSL for Program Construction**: Fluent interface for building PTO programs
 - **Loop Constructs**: Single and nested loops with iteration counts derived from tile shapes
 - **Loop Fusion Optimization**: Combines consecutive elementwise operations into single fused loops
-- **ARM64 NEON Backend**: Generates optimized ARM64 NEON intrinsic code
+- **Multi-Backend Code Generation**: ARM64 NEON, NVIDIA CUDA, Huawei Ascend 910B
 - **Type Checking**: Validation of tile shapes and element types
-- **Code Generation**: Output PTO assembly syntax or ARM64 C code
 
 ## Architecture
 
 ```
 PTO_ISA_Compiler/
+├── pto_compile.py          # Unified compiler (frontend + optimizer + backends)
 ├── pto_isa_definition.py   # Complete PTO ISA instruction definitions
-├── compiler.py             # Compiler infrastructure (parser, type checker, codegen)
-├── pto_c_compiler.py       # PTO C to ARM64 C compiler
-├── arm64_codegen.py        # ARM64 NEON intrinsic code generator
-├── loop_fusion.py          # Loop fusion optimization pass
-├── example_pto_sinh.c      # Example: sinh() using Taylor expansion
+├── pto-isa-cheatsheet.pdf  # ISA reference
 ├── requirements.txt        # Dependencies
-└── README.md              # This file
+├── README.md               # This file
+│
+└── examples/               # Example programs
+    ├── pto_isa_sinh.py             # sinh() Taylor expansion
+    ├── pto_aten_ir_primitives.py   # 27 ATen IR primitives
+    ├── pto_torch_functional.py     # 38 torch.nn.functional APIs
+    ├── pto_torch_nn_operators.py   # 24 torch.nn operators
+    └── pto_torch_tensor.py         # 55 Tensor methods
 ```
 
 ## Quick Start
 
-### ARM64 Backend (C to C Compilation)
+### Installation
 
 ```bash
-# Compile PTO C code to ARM64 NEON C code
-python3 pto_c_compiler.py example_pto_sinh.c example_arm64_sinh.c
-
-# Compile without loop fusion
-python3 pto_c_compiler.py example_pto_sinh.c output.c --no-fusion
+pip install -r requirements.txt
 ```
 
-### Example: PTO C Syntax
+### Basic Example
 
-```c
-// Declare tiles
-PTO_TILE(x, 8, 8, f32)
-PTO_TILE(result, 8, 8, f32)
+```python
+from pto_compile import PTOProgramBuilder, PTOCompiler, generate_all_backends
+from pto_isa_definition import ElementType, MemorySpace
 
-PTO_FUNCTION_START
-void compute(float* input, float* output) {
-    // Load from memory
-    PTO_TLOAD(x, input, 0, 0)
-    
-    // Elementwise operations
-    PTO_TMUL(result, x, x)         // result = x * x
-    PTO_TADDS(result, result, 1.0f) // result = result + 1.0
-    
-    // Store to memory
-    PTO_TSTORE(result, output, 0, 0)
-}
-PTO_FUNCTION_END
+# Build a GELU activation program
+program = (PTOProgramBuilder("gelu")
+    .tile("x", 8, 8, ElementType.F32)
+    .tile("y", 8, 8, ElementType.F32)
+    .memref("input", MemorySpace.GM, ElementType.F32)
+    .memref("output", MemorySpace.GM, ElementType.F32)
+    .load("x", "input")
+    .mul("y", "x", "x")       # y = x²
+    .muls("y", "y", 0.044715) # y = 0.044715 * x²
+    .add("y", "x", "y")       # y = x + 0.044715 * x²
+    .exp("y", "y")            # y = exp(...)
+    .mul("y", "x", "y")       # y = x * exp(...)
+    .store("y", "output")
+    .build())
+
+# Generate code for all backends
+generate_all_backends(program, "gelu_output", ".")
 ```
 
-### Loop Fusion Optimization
+### Run Examples
 
-The compiler automatically fuses consecutive elementwise operations of the same shape:
+```bash
+# Generate sinh() for ARM64, CUDA, Ascend
+python3 examples/pto_isa_sinh.py
+
+# Generate torch.nn.functional implementations
+python3 examples/pto_torch_functional.py
+
+# Generate Tensor methods
+python3 examples/pto_torch_tensor.py
+```
+
+## Loop Fusion Optimization
+
+The compiler automatically fuses consecutive elementwise operations:
 
 ```
-Before fusion (22 separate loops):
-for (row) for (col) { result = x + x; }
-for (row) for (col) { x_squared = x * x; }
-for (row) for (col) { term = term * x_squared; }
+Before fusion (5 separate loops):
+for (row) for (col) { y = x * x; }
+for (row) for (col) { y = y * 0.044715; }
+for (row) for (col) { y = x + y; }
 ...
 
 After fusion (1 fused loop):
 for (row) for (col) {
-    result = x + x;
-    x_squared = x * x;
-    term = term * x_squared;
+    y = x * x;
+    y = y * 0.044715;
+    y = x + y;
     ...
 }
 ```
 
 **Benefits:**
-- Reduces loop overhead by ~95% (21 loop overheads saved for sinh example)
+- Reduces loop overhead by 80-95%
 - Improves cache locality
-- Code size reduction: 461 lines → 265 lines for sinh example
+- Significant code size reduction
 
-## Python DSL Usage
+## Supported Backends
 
-### Basic Usage
-
-```python
-from compiler import PTOProgramBuilder, PTOCompiler
-from pto_isa_definition import ElementType, MemorySpace
-
-# Build a simple matrix multiply program
-program = (PTOProgramBuilder("matmul")
-    # Declare tiles
-    .tile("a", 64, 64, ElementType.F16)
-    .tile("b", 64, 64, ElementType.F16)
-    .tile("c", 64, 64, ElementType.F32)
-    # Declare memory references
-    .memref("mem_a", MemorySpace.GM, ElementType.F16)
-    .memref("mem_b", MemorySpace.GM, ElementType.F16)
-    .memref("mem_c", MemorySpace.GM, ElementType.F32)
-    # Load operands
-    .load("a", "mem_a", 0, 0)
-    .load("b", "mem_b", 0, 0)
-    # Matrix multiply
-    .matmul("c", "a", "b")
-    # Store result
-    .store("c", "mem_c", 0, 0)
-    .build())
-
-# Compile to PTO assembly
-compiler = PTOCompiler()
-asm_code = compiler.compile(program)
-print(asm_code)
-```
-
-### Loop Constructs
-
-```python
-# Single-level loop iterating over tile dimensions
-program = (PTOProgramBuilder("loop_example")
-    .tile("data", 64, 64, ElementType.F32)
-    .memref("mem", MemorySpace.GM, ElementType.F32)
-    # Loop based on tile rows
-    .tile_loop("i", "data", "rows", step=1)
-    .load("data", "mem")
-    .end_for()
-    .build())
-
-# 2-level nested loop
-program = (PTOProgramBuilder("nested_loop")
-    .tile("data", 64, 64, ElementType.F32)
-    .memref("mem", MemorySpace.GM, ElementType.F32)
-    # Outer loop over rows, inner over columns
-    .nested_tile_loop("i", "j", "data")
-    .load("data", "mem")
-    .end_nested_loop()
-    .build())
-```
+| Backend | Output | Description |
+|---------|--------|-------------|
+| ARM64 NEON | `.c` | Apple Silicon, ARM servers |
+| NVIDIA CUDA | `.cu` | GPU computing |
+| Huawei Ascend 910B | `.cpp` | NPU/AI accelerator |
+| PTO-AS | `.pto` | PTO assembly (portable) |
 
 ## PTO ISA Instructions
 
@@ -150,154 +117,400 @@ program = (PTOProgramBuilder("nested_loop")
 
 | Category | Instructions |
 |----------|-------------|
-| Memory | `TLOAD`, `TSTORE`, `MGATHER`, `MSCATTER` |
-| Elementwise Unary | `TABS`, `TNEG`, `TNOT`, `TEXP`, `TLOG`, `TSQRT`, `TRSQRT`, `TRECIP`, `TRELU` |
-| Elementwise Binary | `TADD`, `TSUB`, `TMUL`, `TDIV`, `TREM`, `TMAX`, `TMIN`, `TAND`, `TOR`, `TXOR`, `TSHL`, `TSHR` |
-| Scalar Ops | `TADDS`, `TSUBS`, `TMULS`, `TDIVS`, `TMAXS`, `TMINS` |
-| Matrix | `TMATMUL`, `TMATMUL_ACC`, `TMATMUL_BIAS`, `TMATMUL_MX` |
-| Reduction | `TROWSUM`, `TROWMAX`, `TROWMIN`, `TCOLSUM`, `TCOLMAX`, `TCOLMIN` |
-| Broadcast | `TEXPANDS`, `TROWEXPAND`, `TCOLEXPAND`, `TROWEXPANDMUL` |
-| Data Movement | `TTRANS`, `TRESHAPE`, `TEXTRACT`, `TGATHER`, `TSCATTER` |
+| Memory | `TLOAD`, `TSTORE` |
+| Elementwise Unary | `TABS`, `TNEG`, `TEXP`, `TLOG`, `TSQRT`, `TRSQRT`, `TRECIP`, `TRELU` |
+| Elementwise Binary | `TADD`, `TSUB`, `TMUL`, `TDIV`, `TMAX`, `TMIN` |
+| Scalar Ops | `TADDS`, `TSUBS`, `TMULS`, `TDIVS` |
+| Matrix | `TMATMUL`, `TMATMUL_ACC` |
+| Reduction | `TROWSUM`, `TCOLSUM` |
+| Broadcast | `TEXPANDS`, `TROWEXPAND`, `TCOLEXPAND`, `TROWEXPANDSUB`, `TROWEXPANDDIV`, `TROWEXPANDMUL` |
 
-### ARM64 NEON Mapping
-
-| PTO Instruction | ARM64 NEON Intrinsic |
-|-----------------|---------------------|
-| `TADD` | `vaddq_f32` |
-| `TSUB` | `vsubq_f32` |
-| `TMUL` | `vmulq_f32` |
-| `TDIV` | `vdivq_f32` |
-| `TABS` | `vabsq_f32` |
-| `TNEG` | `vnegq_f32` |
-| `TSQRT` | `vsqrtq_f32` |
-| `TRELU` | `vmaxq_f32` (with zero) |
-| `TADDS/TMULS/TDIVS` | Scalar broadcast + vector op |
-
-### Scalar Instructions
-
-| Category | Instructions |
-|----------|-------------|
-| Arithmetic | `ADD`, `SUB`, `MUL`, `DIV`, `REM`, `NEG`, `ABS` |
-| Bitwise | `AND`, `OR`, `XOR`, `NOT`, `SHL`, `SHR`, `SAR` |
-| Comparison | `CMP` |
-| Memory | `LOAD`, `STORE` |
-| Control | `MOV`, `LI`, `CVT` |
-
-### Control Flow Instructions
+### Control Flow
 
 | Category | Instructions |
 |----------|-------------|
 | Loops | `FOR`, `ENDFOR`, `WHILE`, `DO`, `ENDWHILE` |
 | Conditional | `IF`, `ELSE`, `ENDIF` |
-| Branch | `BR`, `BCOND`, `BREAK`, `CONTINUE` |
-| Functions | `CALL`, `RET`, `YIELD` |
 
-## Loop Fusion Details
+---
 
-### Fusion Rules
+# PTOProgramBuilder Reference Guide
 
-1. **Fusable Operations**: Elementwise operations (TADD, TSUB, TMUL, TDIV, TABS, TEXP, etc.)
-2. **Same Shape Required**: Only operations on tiles with matching dimensions are fused
-3. **Fusion Barriers**: Operations that stop fusion:
-   - Reductions (TROWSUM, TCOLSUM)
-   - Matrix operations (TMATMUL)
-   - Control flow (FOR, ENDFOR)
+## Overview
 
-### How It Works
+`PTOProgramBuilder` is a fluent interface for constructing PTO programs. It provides a chainable API to declare tiles, memory references, and operations, then builds a `PTOProgram` object that can be compiled to multiple backends.
 
-```
-Input PTO Instructions:
-  TMUL(x_squared, x, x)      # Shape: 8x8
-  TMULS(term, x, 1.0f)       # Shape: 8x8
-  TMUL(term, term, x_squared) # Shape: 8x8
-  TDIVS(term, term, 6.0f)    # Shape: 8x8
-  TADD(result, result, term)  # Shape: 8x8
-
-Fusion Analysis:
-  All operations: same shape (8x8), all elementwise
-  → Fuse into single loop
-
-Output ARM64 Code:
-  for (_row = 0; _row < 8; _row++) {
-      for (_col = 0; _col < 8; _col += 4) {  // NEON: 4 floats
-          // All 5 operations in one iteration
-          x_squared[row][col] = x * x;
-          term[row][col] = x * 1.0f;
-          term[row][col] = term * x_squared;
-          term[row][col] = term / 6.0f;
-          result[row][col] = result + term;
-      }
-  }
-```
-
-## Data Types
-
-### Element Types
+## Basic Structure
 
 ```python
-from pto_isa_definition import ElementType
+from pto_compile import PTOProgramBuilder, PTOCompiler
+from pto_isa_definition import ElementType, MemorySpace
 
-# Floating point
-ElementType.F16   # 16-bit float
-ElementType.F32   # 32-bit float
-ElementType.BF16  # Brain float 16
-
-# Integer
-ElementType.I8, ElementType.I16, ElementType.I32, ElementType.I64
-ElementType.U8, ElementType.U16, ElementType.U32, ElementType.U64
+program = (PTOProgramBuilder("program_name")
+    # 1. Declare tiles (local tensor storage)
+    .tile("name", rows, cols, dtype)
+    
+    # 2. Declare memory references (external memory)
+    .memref("name", memory_space, dtype)
+    
+    # 3. Load data from memory to tiles
+    .load("tile_name", "memref_name")
+    
+    # 4. Perform operations
+    .add("dst", "src0", "src1")
+    
+    # 5. Store results back to memory
+    .store("tile_name", "memref_name")
+    
+    # 6. Build the program
+    .build())
 ```
 
-### Tile Shapes
+## Declaration Methods
+
+### `.tile(name, rows, cols, dtype)`
+
+Declare a local tile (2D tensor in on-chip memory).
 
 ```python
-from pto_isa_definition import TileShape, TileType
-
-# Define a tile shape
-shape = TileShape(rows=64, cols=64)
-
-# Define a complete tile type
-tile_type = TileType.create(rows=64, cols=64, dtype=ElementType.F32)
-# -> !pto.tile<64x64xf32>
+.tile("x", 8, 8, ElementType.F32)      # 8x8 float32 tile
+.tile("weight", 64, 128, ElementType.F16)  # 64x128 float16 tile
 ```
 
-## Compiler Pipeline
+**Parameters:**
+- `name`: Tile identifier (string)
+- `rows`: Number of rows (int)
+- `cols`: Number of columns (int)
+- `dtype`: Element type (`ElementType.F32`, `F16`, `BF16`, `I32`, etc.)
 
-```
-                       ┌──────────────┐
-PTO C Code ──────────> │   Parser     │
-                       └──────┬───────┘
-                              │
-                       ┌──────▼───────┐
-                       │ Loop Fusion  │  ← Combines elementwise ops
-                       │  Optimizer   │
-                       └──────┬───────┘
-                              │
-                       ┌──────▼───────┐
-                       │   ARM64      │  ← Generates NEON intrinsics
-                       │  Code Gen    │
-                       └──────┬───────┘
-                              │
-                       ┌──────▼───────┐
-                       │  ARM64 C     │
-                       │   Output     │
-                       └──────────────┘
+### `.scalar(name, dtype)`
+
+Declare a scalar variable.
+
+```python
+.scalar("alpha", ElementType.F32)
 ```
 
-## Running Examples
+### `.memref(name, space, dtype, shape=None)`
 
-```bash
-# Run the Python DSL compiler with built-in examples
-python3 compiler.py
+Declare a memory reference (pointer to external memory).
 
-# Run the ISA definition examples
-python3 pto_isa_definition.py
-
-# Run loop fusion optimizer test
-python3 loop_fusion.py
-
-# Compile sinh example to ARM64
-python3 pto_c_compiler.py example_pto_sinh.c example_arm64_sinh.c
+```python
+.memref("input", MemorySpace.GM, ElementType.F32)      # Global memory
+.memref("weight", MemorySpace.L1, ElementType.F16)     # L1 cache
 ```
+
+**Memory Spaces:**
+- `MemorySpace.GM` - Global Memory
+- `MemorySpace.L1` - L1 Cache
+- `MemorySpace.L2` - L2 Cache
+- `MemorySpace.UB` - Unified Buffer (Ascend)
+
+## Memory Operations
+
+### `.load(dst_tile, src_memref, row=0, col=0)`
+
+Load data from memory into a tile.
+
+```python
+.load("x", "input")           # Load at offset (0, 0)
+.load("x", "input", 8, 16)    # Load at offset (8, 16)
+```
+
+### `.store(src_tile, dst_memref, row=0, col=0)`
+
+Store tile data to memory.
+
+```python
+.store("result", "output")    # Store at offset (0, 0)
+```
+
+## Arithmetic Operations
+
+### Binary Operations
+
+| Method | Operation | Description |
+|--------|-----------|-------------|
+| `.add(dst, src0, src1)` | `dst = src0 + src1` | Elementwise addition |
+| `.sub(dst, src0, src1)` | `dst = src0 - src1` | Elementwise subtraction |
+| `.mul(dst, src0, src1)` | `dst = src0 * src1` | Elementwise multiplication |
+| `.div(dst, src0, src1)` | `dst = src0 / src1` | Elementwise division |
+| `.max(dst, src0, src1)` | `dst = max(src0, src1)` | Elementwise maximum |
+| `.min(dst, src0, src1)` | `dst = min(src0, src1)` | Elementwise minimum |
+
+```python
+.add("c", "a", "b")    # c = a + b
+.mul("y", "x", "x")    # y = x * x (square)
+```
+
+### Scalar Operations
+
+| Method | Operation | Description |
+|--------|-----------|-------------|
+| `.adds(dst, src, scalar)` | `dst = src + scalar` | Add scalar to all elements |
+| `.muls(dst, src, scalar)` | `dst = src * scalar` | Multiply all elements by scalar |
+| `.divs(dst, src, scalar)` | `dst = src / scalar` | Divide all elements by scalar |
+
+```python
+.adds("y", "x", 1.0)      # y = x + 1.0
+.muls("y", "x", 0.5)      # y = x * 0.5
+.divs("y", "x", 2.0)      # y = x / 2.0
+```
+
+### Unary Operations
+
+| Method | Operation | Description |
+|--------|-----------|-------------|
+| `.neg(dst, src)` | `dst = -src` | Negation |
+| `.abs(dst, src)` | `dst = \|src\|` | Absolute value |
+| `.sqrt(dst, src)` | `dst = √src` | Square root |
+| `.rsqrt(dst, src)` | `dst = 1/√src` | Reciprocal square root |
+| `.recip(dst, src)` | `dst = 1/src` | Reciprocal |
+| `.exp(dst, src)` | `dst = eˢʳᶜ` | Exponential |
+| `.log(dst, src)` | `dst = ln(src)` | Natural logarithm |
+| `.relu(dst, src)` | `dst = max(0, src)` | ReLU activation |
+
+```python
+.exp("exp_x", "x")       # exp_x = exp(x)
+.relu("activated", "x")  # activated = ReLU(x)
+```
+
+## Reduction Operations
+
+### `.rowsum(dst, src)`
+
+Sum elements across each row. Output shape: `[rows, 1]`
+
+```python
+.tile("x", 8, 8)
+.tile("row_sums", 8, 1)
+.rowsum("row_sums", "x")  # row_sums[i][0] = sum(x[i][:])
+```
+
+### `.colsum(dst, src)`
+
+Sum elements across each column. Output shape: `[1, cols]`
+
+```python
+.tile("x", 8, 8)
+.tile("col_sums", 1, 8)
+.colsum("col_sums", "x")  # col_sums[0][j] = sum(x[:][j])
+```
+
+## Broadcast Operations
+
+### `.expands(dst, value)`
+
+Broadcast a scalar value to fill a tile.
+
+```python
+.tile("ones", 8, 8)
+.expands("ones", 1.0)     # Fill with 1.0
+```
+
+### `.rowexpandsub(dst, src0, src1)` / `.rowexpanddiv()` / `.rowexpandmul()`
+
+Row-wise broadcast operation. `src1` must be `[rows, 1]` shape.
+
+```python
+.tile("x", 8, 8)
+.tile("mean", 8, 1)
+.tile("centered", 8, 8)
+.rowsum("mean", "x")
+.divs("mean", "mean", 8.0)
+.rowexpandsub("centered", "x", "mean")  # centered = x - broadcast(mean)
+```
+
+## Matrix Operations
+
+### `.matmul(dst, a, b)`
+
+Matrix multiplication: `dst = a @ b`
+
+```python
+.tile("a", 64, 128)
+.tile("b", 128, 64)
+.tile("c", 64, 64)
+.matmul("c", "a", "b")  # c[64,64] = a[64,128] @ b[128,64]
+```
+
+## Loop Constructs
+
+### `.for_loop(iv_name, lb, ub, step=1)` / `.end_for()`
+
+Create a FOR loop with explicit bounds.
+
+```python
+.for_loop("i", 0, 4, 1)
+    .load("tile", "mem")
+    .relu("tile", "tile")
+    .store("tile", "mem")
+.end_for()
+```
+
+### `.tile_loop(iv_name, tile_name, dimension, step=1)`
+
+Loop based on tile dimensions.
+
+```python
+.tile("data", 64, 64)
+.tile_loop("i", "data", "rows")  # Loop 0..64
+    # operations
+.end_for()
+```
+
+### `.nested_tile_loop(outer_iv, inner_iv, tile_name)` / `.end_nested_loop()`
+
+2-level nested loop over tile dimensions.
+
+```python
+.tile("data", 64, 64)
+.nested_tile_loop("i", "j", "data")  # Outer: rows, Inner: cols
+    # operations
+.end_nested_loop()
+```
+
+## Complete Examples
+
+### Example 1: Sigmoid Activation
+
+```python
+def build_sigmoid():
+    """sigmoid(x) = 1 / (1 + exp(-x))"""
+    return (PTOProgramBuilder("sigmoid")
+        .tile("x", 8, 8, ElementType.F32)
+        .tile("neg_x", 8, 8, ElementType.F32)
+        .tile("exp_neg", 8, 8, ElementType.F32)
+        .tile("one_plus", 8, 8, ElementType.F32)
+        .tile("result", 8, 8, ElementType.F32)
+        .memref("input", MemorySpace.GM, ElementType.F32)
+        .memref("output", MemorySpace.GM, ElementType.F32)
+        .load("x", "input")
+        .neg("neg_x", "x")              # neg_x = -x
+        .exp("exp_neg", "neg_x")        # exp_neg = exp(-x)
+        .adds("one_plus", "exp_neg", 1.0)  # one_plus = 1 + exp(-x)
+        .recip("result", "one_plus")    # result = 1 / (1 + exp(-x))
+        .store("result", "output")
+        .build())
+```
+
+### Example 2: Layer Normalization
+
+```python
+def build_layer_norm(rows=8, cols=8, eps=1e-5):
+    """LayerNorm: (x - mean) / sqrt(var + eps)"""
+    return (PTOProgramBuilder("layer_norm")
+        .tile("x", rows, cols, ElementType.F32)
+        .tile("mean", rows, 1, ElementType.F32)
+        .tile("centered", rows, cols, ElementType.F32)
+        .tile("sq_centered", rows, cols, ElementType.F32)
+        .tile("var", rows, 1, ElementType.F32)
+        .tile("std", rows, 1, ElementType.F32)
+        .tile("result", rows, cols, ElementType.F32)
+        .memref("input", MemorySpace.GM, ElementType.F32)
+        .memref("output", MemorySpace.GM, ElementType.F32)
+        .load("x", "input")
+        # Mean
+        .rowsum("mean", "x")
+        .divs("mean", "mean", float(cols))
+        # Center
+        .rowexpandsub("centered", "x", "mean")
+        # Variance
+        .mul("sq_centered", "centered", "centered")
+        .rowsum("var", "sq_centered")
+        .divs("var", "var", float(cols))
+        # Std
+        .adds("var", "var", eps)
+        .sqrt("std", "var")
+        # Normalize
+        .rowexpanddiv("result", "centered", "std")
+        .store("result", "output")
+        .build())
+```
+
+### Example 3: Softmax
+
+```python
+def build_softmax(rows=8, cols=8):
+    """Softmax: exp(x - max) / sum(exp(x - max))"""
+    return (PTOProgramBuilder("softmax")
+        .tile("x", rows, cols, ElementType.F32)
+        .tile("row_max", rows, 1, ElementType.F32)
+        .tile("shifted", rows, cols, ElementType.F32)
+        .tile("exp_x", rows, cols, ElementType.F32)
+        .tile("row_sum", rows, 1, ElementType.F32)
+        .tile("result", rows, cols, ElementType.F32)
+        .memref("input", MemorySpace.GM, ElementType.F32)
+        .memref("output", MemorySpace.GM, ElementType.F32)
+        .load("x", "input")
+        # Compute row max (simplified with mean)
+        .rowsum("row_max", "x")
+        .divs("row_max", "row_max", float(cols))
+        # Shift for numerical stability
+        .rowexpandsub("shifted", "x", "row_max")
+        # Exp
+        .exp("exp_x", "shifted")
+        # Sum
+        .rowsum("row_sum", "exp_x")
+        # Normalize
+        .rowexpanddiv("result", "exp_x", "row_sum")
+        .store("result", "output")
+        .build())
+```
+
+## Compiling Programs
+
+### Generate PTO Assembly
+
+```python
+from pto_compile import PTOCompiler
+
+program = build_sigmoid()
+compiler = PTOCompiler()
+pto_asm = compiler.compile(program)
+print(pto_asm)
+```
+
+### Generate Multi-Backend Code
+
+```python
+from pto_compile import generate_all_backends
+
+program = build_sigmoid()
+results = generate_all_backends(program, "sigmoid", "output_dir")
+# Creates:
+#   output_dir/sigmoid_arm64/sigmoid.c
+#   output_dir/sigmoid_cuda/sigmoid.cu
+#   output_dir/sigmoid_ascend910b/sigmoid.cpp
+#   output_dir/sigmoid_pto/sigmoid.pto
+```
+
+### Generate Specific Backend
+
+```python
+from pto_compile import generate_arm64_code, generate_cuda_code, generate_ascend_code
+
+program = build_sigmoid()
+
+arm64_code = generate_arm64_code(program, enable_fusion=True)
+cuda_code = generate_cuda_code(program, enable_fusion=True)
+ascend_code = generate_ascend_code(program, enable_fusion=True)
+```
+
+## API Summary
+
+| Category | Methods |
+|----------|---------|
+| Declaration | `tile()`, `scalar()`, `memref()` |
+| Memory | `load()`, `store()` |
+| Binary Ops | `add()`, `sub()`, `mul()`, `div()`, `max()`, `min()` |
+| Scalar Ops | `adds()`, `muls()`, `divs()` |
+| Unary Ops | `neg()`, `abs()`, `sqrt()`, `rsqrt()`, `recip()`, `exp()`, `log()`, `relu()` |
+| Reduction | `rowsum()`, `colsum()` |
+| Broadcast | `expands()`, `rowexpandsub()`, `rowexpanddiv()`, `rowexpandmul()` |
+| Matrix | `matmul()`, `matmul_acc()` |
+| Loops | `for_loop()`, `end_for()`, `tile_loop()`, `nested_tile_loop()`, `end_nested_loop()` |
+| Build | `build()` |
 
 ## License
 
