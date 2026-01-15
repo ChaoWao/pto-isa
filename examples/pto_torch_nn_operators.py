@@ -997,6 +997,6 @@ if __name__ == "__main__":
     print(f"Total files generated: {total_files}")
     print(f"Output directories:")
     for backend_key, backend_info in BACKENDS.items():
-        print(f"  - {OUTPUT_PREFIX}{backend_info['suffix']}/")
-    print(f"  - {OUTPUT_PREFIX}_pto/")
+        print(f"  - output{backend_info['suffix']}/{OUTPUT_PREFIX}/")
+    print(f"  - output_pto/{OUTPUT_PREFIX}/")
     print("=" * 70)

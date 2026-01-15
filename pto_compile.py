@@ -1895,8 +1895,15 @@ class MultiBackendCodeGenerator:
         
         Args:
             program: PTOProgram built using PTOProgramBuilder
-            output_prefix: Prefix for output directory names
+            output_prefix: Category name for output subdirectory (e.g., "sinh_taylor", "aten_primitives")
             output_base_dir: Base directory for output
+            
+        Output structure:
+            output_base_dir/
+            ├── output_arm64/{output_prefix}/{program.name}.c
+            ├── output_cuda/{output_prefix}/{program.name}.cu
+            ├── output_ascend910b/{output_prefix}/{program.name}.cpp
+            └── output_pto/{output_prefix}/{program.name}.pto
             
         Returns:
             Dict mapping backend name to output file path
@@ -1911,7 +1918,8 @@ class MultiBackendCodeGenerator:
         }
         
         for backend_key, backend_info in BACKENDS.items():
-            output_dir = os.path.join(output_base_dir, f"{output_prefix}{backend_info['suffix']}")
+            # New structure: output_arm64/category/file.c
+            output_dir = os.path.join(output_base_dir, f"output{backend_info['suffix']}", output_prefix)
             os.makedirs(output_dir, exist_ok=True)
             
             code = generators[backend_key](program)
@@ -1926,7 +1934,7 @@ class MultiBackendCodeGenerator:
         # Also save PTO-AS assembly
         compiler = PTOCompiler()
         pto_asm = compiler.compile(program)
-        pto_dir = os.path.join(output_base_dir, f"{output_prefix}_pto")
+        pto_dir = os.path.join(output_base_dir, "output_pto", output_prefix)
         os.makedirs(pto_dir, exist_ok=True)
         pto_file = os.path.join(pto_dir, f"{program.name}.pto")
         with open(pto_file, "w") as f:

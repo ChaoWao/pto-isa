@@ -17,18 +17,32 @@ The PTO ISA operates on **Tiles** - 2-dimensional blocks of data representing te
 
 ```
 PTO_ISA_Compiler/
-├── pto_compile.py          # Unified compiler (frontend + optimizer + backends)
-├── pto_isa_definition.py   # Complete PTO ISA instruction definitions
-├── pto-isa-cheatsheet.pdf  # ISA reference
-├── requirements.txt        # Dependencies
-├── README.md               # This file
+├── pto_compile.py              # Unified compiler (frontend + optimizer + backends)
+├── pto_isa_definition.py       # Complete PTO ISA instruction definitions
+├── pto-isa-cheatsheet.pdf      # ISA reference
+├── PTO_ISA_improvement_ideas.md # Improvement suggestions
+├── requirements.txt            # Dependencies
+├── README.md                   # This file
 │
-└── examples/               # Example programs
-    ├── pto_isa_sinh.py             # sinh() Taylor expansion
-    ├── pto_aten_ir_primitives.py   # 27 ATen IR primitives
-    ├── pto_torch_functional.py     # 38 torch.nn.functional APIs
-    ├── pto_torch_nn_operators.py   # 24 torch.nn operators
-    └── pto_torch_tensor.py         # 55 Tensor methods
+└── examples/                   # Example programs and generated outputs
+    ├── pto_isa_sinh.py               # sinh() Taylor expansion
+    ├── pto_aten_ir_primitives.py     # 27 ATen IR primitives
+    ├── pto_torch_functional.py       # 38 torch.nn.functional APIs
+    ├── pto_torch_nn_operators.py     # 24 torch.nn operators
+    ├── pto_torch_tensor.py           # 55 Tensor methods
+    │
+    ├── output_arm64/             # ARM64 NEON generated code
+    │   ├── sinh_taylor/
+    │   ├── aten_primitives/
+    │   ├── torch_functional/
+    │   ├── torch_nn/
+    │   └── torch_tensor/
+    ├── output_cuda/              # NVIDIA CUDA generated code
+    │   └── ...
+    ├── output_ascend910b/        # Huawei Ascend 910B generated code
+    │   └── ...
+    └── output_pto/               # PTO Assembly generated code
+        └── ...
 ```
 
 ## Quick Start
@@ -477,12 +491,12 @@ print(pto_asm)
 from pto_compile import generate_all_backends
 
 program = build_sigmoid()
-results = generate_all_backends(program, "sigmoid", "output_dir")
+results = generate_all_backends(program, "activations", "examples")
 # Creates:
-#   output_dir/sigmoid_arm64/sigmoid.c
-#   output_dir/sigmoid_cuda/sigmoid.cu
-#   output_dir/sigmoid_ascend910b/sigmoid.cpp
-#   output_dir/sigmoid_pto/sigmoid.pto
+#   examples/output_arm64/activations/sigmoid.c
+#   examples/output_cuda/activations/sigmoid.cu
+#   examples/output_ascend910b/activations/sigmoid.cpp
+#   examples/output_pto/activations/sigmoid.pto
 ```
 
 ### Generate Specific Backend
