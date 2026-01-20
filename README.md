@@ -162,14 +162,20 @@ def create_dynamic_softmax():
         
         # 动态循环 - 根据输入大小迭代
         .for_loop("tile_idx", 0, "num_tiles", 1)
-            # CALL InCore 函数 - 编译器自动生成任务调度代码
-            .call("rowmax", {"input": "input", "output": "temp_max"})
-            .call("rowexpandsub", {...})
-            .call("elem_exp", {...})
-            .call("rowsum", {...})
-            .call("rowexpanddiv", {...})
+            # CALL InCore 函数 - 使用偏移参数区分不同 tile
+            # 格式: ("tensor_name", "loop_var", col_offset)
+            .call("rowmax", {
+                "input": ("input", "tile_idx", 0),      # input[tile_idx]
+                "output": ("temp_max", "tile_idx", 0)
+            })
+            .call("rowexpandsub", {
+                "input_x": ("input", "tile_idx", 0),
+                "input_row": ("temp_max", "tile_idx", 0),
+                "output": ("temp_shifted", "tile_idx", 0)
+            })
+            # ... 其他 CALL
         .end_for()
-        .build())
+    .build())
 ```
 
 **生成的 ARM64 C 代码（主机端）：**
@@ -189,14 +195,69 @@ void dynamic_softmax(PTORuntime* rt, float* input, float* output,
 }
 ```
 
-### 2.3 编程语法对比
+### 2.3 CALL 指令与偏移参数
+
+在 Orchestration 函数中，`.call()` 支持两种参数格式：
+
+```python
+# 格式 1: 简单参数（无偏移）
+.call("func_name", {"param": "tensor_name"})
+
+# 格式 2: 带偏移参数（用于动态 tiling）
+.call("func_name", {"param": ("tensor_name", "row_offset", col_offset)})
+```
+
+**偏移参数说明：**
+- `tensor_name`: 全局内存中的张量名
+- `row_offset`: 行偏移表达式，可以是：
+  - 循环变量名（如 `"tile_i"`, `"q_tile"`）
+  - 标量变量名
+  - 整数常量（如 `0`）
+- `col_offset`: 列偏移，通常为 `0`
+
+**示例：LLaMA Flash Attention 的三阶段依赖**
+
+```python
+# Phase 1: Pre-Attention (所有 tile 并行)
+.for_loop("tile_i", 0, "num_tiles", 1)
+    .call("rmsnorm_tile", {
+        "input": ("input", "tile_i", 0),       # input[tile_i]
+        "output": ("temp_norm", "tile_i", 0)
+    })
+    .call("tile_matmul", {
+        "input_a": ("temp_norm", "tile_i", 0),
+        "input_b": "wq",                       # 共享权重，无偏移
+        "output": ("all_q_tiles", "tile_i", 0)
+    })
+.end_for()
+
+# Phase 2: Flash Attention (交叉 tile 依赖)
+.for_loop("q_tile", 0, "num_tiles", 1)
+    .for_loop("kv_tile", 0, "num_tiles", 1)
+        .call("flash_attn_score_block", {
+            "input_q": ("all_q_rope", "q_tile", 0),   # Q[q_tile]
+            "input_k": ("all_k_rope", "kv_tile", 0),  # K[kv_tile] ← 交叉依赖!
+            "output_s": ("temp_scores", "q_tile", 0)
+        })
+    .end_for()
+.end_for()
+```
+
+**偏移的作用：**
+- 不同 tile 使用不同偏移，使得任务之间**没有虚假依赖**
+- Runtime 可以正确识别并行机会
+- Phase 1 和 Phase 3: 所有 tile 完全并行
+- Phase 2: Q[i] 依赖所有 K[j], V[j]，形成 N×N 交叉依赖
+
+### 2.4 编程语法对比
 
 | 操作 | InCore Function | Orchestration Function |
 |------|-----------------|----------------------|
 | **Tile 操作** | `.add()`, `.mul()`, `.exp()` | ❌ 不支持 |
 | **标量运算** | `.scalar_add()` | `.scalar_add()` |
 | **控制流** | `.for_loop()`, `.if_then()` | `.for_loop()`, `.if_then()` |
-| **函数调用** | `.call()` → 内联展开 | `.call()` → 生成任务 |
+| **函数调用** | `.call()` → 内联展开 | `.call()` → 生成任务调度代码 |
+| **偏移参数** | ❌ 不需要 | ✅ 支持 `("tensor", "offset", 0)` |
 | **内存访问** | `.load()`, `.store()` | ❌ 不支持 |
 
 ---
@@ -343,14 +404,14 @@ void run_llama_layer(int seq_len) {
 
 以下是 LLaMA 7B Layer（含 Flash Attention）的 Task Graph 构建性能：
 
-| Sequence Length | Tiles | Tasks | Build Time | Memory |
-|-----------------|-------|-------|------------|--------|
-| **1K** | 32 | 3,584 | 0.8 ms | 9.8 MB |
-| **2K** | 64 | 13,312 | 2.6 ms | 36.4 MB |
-| **3K** | 96 | 29,184 | 5.4 ms | 79.8 MB |
-| **4K** | 128 | 51,200 | 9.3 ms | 140.0 MB |
+| Sequence Length | Tiles | Tasks | Build Time | Tasks/ms | Memory | Per-Task |
+|-----------------|-------|-------|------------|----------|--------|----------|
+| **1K** | 32 | 3,584 | 0.855 ms | 4,192 | 9.81 MB | 2,872 B |
+| **2K** | 64 | 13,312 | 2.518 ms | 5,287 | 36.41 MB | 2,868 B |
+| **3K** | 96 | 29,184 | 6.036 ms | 4,835 | 79.79 MB | 2,867 B |
+| **4K** | 128 | 51,200 | 9.184 ms | 5,575 | 139.95 MB | 2,866 B |
 
-**Task 数量公式：** `Tasks = 16N + 3N²` (N = num_tiles)
+**Task 数量公式：** `Tasks = 16N + 3N²` (N = seq_len / tile_rows)
 
 - Phase 1 (Pre-Attention): 6N tasks (并行)
 - Phase 2 (Flash Attention): N(2 + 3N) tasks (交叉依赖)
@@ -360,6 +421,7 @@ void run_llama_layer(int seq_len) {
 - `sizeof(PendingTask)` = 2,864 bytes
 - `sizeof(TensorMapEntry)` = 56 bytes
 - 每任务平均内存 ≈ 2,870 bytes
+- `PTO_MAX_TASKS` = 65,536 (可容纳 seq_len ≤ 4K)
 
 ---
 
