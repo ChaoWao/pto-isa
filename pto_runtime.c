@@ -6,6 +6,7 @@
  */
 
 #include "pto_runtime.h"
+#include <time.h>  // For nanosleep, clock_gettime
 
 // Debug output control - set to 0 to disable debug prints
 #ifndef PTO_DEBUG
@@ -43,6 +44,19 @@ void pto_runtime_init(PTORuntime* rt) {
     rt->total_tasks_scheduled = 0;
     rt->total_tasks_completed = 0;
     
+    // Initialize thread synchronization primitives
+    pthread_mutex_init(&rt->queue_mutex, NULL);
+    pthread_mutex_init(&rt->task_mutex, NULL);
+    pthread_cond_init(&rt->queue_not_empty, NULL);
+    pthread_cond_init(&rt->all_done, NULL);
+    
+    // Initialize worker state
+    rt->num_workers = 0;
+    rt->shutdown_requested = false;
+    rt->execution_started = false;
+    memset(rt->workers, 0, sizeof(rt->workers));
+    memset(rt->func_registry, 0, sizeof(rt->func_registry));
+    
     DEBUG_PRINT("[PTO Runtime] Initialized (max_tasks=%d, tensormap_size=%d)\n",
            PTO_MAX_TASKS, PTO_TENSORMAP_SIZE);
 }
@@ -52,6 +66,12 @@ void pto_runtime_shutdown(PTORuntime* rt) {
     
     // Free tensor map entries
     pto_tensormap_clear(rt);
+    
+    // Destroy thread synchronization primitives
+    pthread_mutex_destroy(&rt->queue_mutex);
+    pthread_mutex_destroy(&rt->task_mutex);
+    pthread_cond_destroy(&rt->queue_not_empty);
+    pthread_cond_destroy(&rt->all_done);
     
     DEBUG_PRINT("[PTO Runtime] Shutdown (scheduled=%lld, completed=%lld)\n",
            (long long)rt->total_tasks_scheduled,
@@ -157,6 +177,64 @@ static int32_t ready_queue_pop(PTORuntime* rt) {
     int32_t task_id = rt->ready_queue[rt->ready_head];
     rt->ready_head = (rt->ready_head + 1) % PTO_MAX_READY_QUEUE;
     rt->ready_count--;
+    return task_id;
+}
+
+// =============================================================================
+// Thread-safe Ready Queue Operations
+// =============================================================================
+
+static void ready_queue_push_threadsafe(PTORuntime* rt, int32_t task_id) {
+    pthread_mutex_lock(&rt->queue_mutex);
+    
+    if (rt->ready_count >= PTO_MAX_READY_QUEUE) {
+        fprintf(stderr, "[PTO Runtime] ERROR: Ready queue overflow\n");
+        pthread_mutex_unlock(&rt->queue_mutex);
+        return;
+    }
+    
+    rt->ready_queue[rt->ready_tail] = task_id;
+    rt->ready_tail = (rt->ready_tail + 1) % PTO_MAX_READY_QUEUE;
+    rt->ready_count++;
+    
+    // Signal waiting workers that a task is available
+    pthread_cond_signal(&rt->queue_not_empty);
+    
+    pthread_mutex_unlock(&rt->queue_mutex);
+}
+
+int32_t pto_get_ready_task_blocking(PTORuntime* rt) {
+    pthread_mutex_lock(&rt->queue_mutex);
+    
+    // Wait until: task available OR shutdown requested OR all tasks done
+    while (rt->ready_count == 0 && !rt->shutdown_requested) {
+        // Check if all tasks are completed
+        if (rt->execution_started && rt->total_tasks_completed >= rt->total_tasks_scheduled) {
+            pthread_mutex_unlock(&rt->queue_mutex);
+            return -1;  // All done
+        }
+        
+        // Wait for signal (with timeout to check shutdown periodically)
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_nsec += 10000000;  // 10ms timeout
+        if (timeout.tv_nsec >= 1000000000) {
+            timeout.tv_sec++;
+            timeout.tv_nsec -= 1000000000;
+        }
+        pthread_cond_timedwait(&rt->queue_not_empty, &rt->queue_mutex, &timeout);
+    }
+    
+    if (rt->shutdown_requested || rt->ready_count == 0) {
+        pthread_mutex_unlock(&rt->queue_mutex);
+        return -1;
+    }
+    
+    int32_t task_id = rt->ready_queue[rt->ready_head];
+    rt->ready_head = (rt->ready_head + 1) % PTO_MAX_READY_QUEUE;
+    rt->ready_count--;
+    
+    pthread_mutex_unlock(&rt->queue_mutex);
     return task_id;
 }
 
@@ -336,6 +414,60 @@ void pto_task_complete(PTORuntime* rt, int32_t task_id) {
     }
 }
 
+void pto_task_complete_threadsafe(PTORuntime* rt, int32_t task_id) {
+    if (task_id < 0 || task_id >= rt->next_task_id) {
+        fprintf(stderr, "[PTO Runtime] ERROR: Invalid task_id %d\n", task_id);
+        return;
+    }
+    
+    pthread_mutex_lock(&rt->task_mutex);
+    
+    PendingTask* task = &rt->pend_task[task_id];
+    task->is_complete = true;
+    rt->active_task_count--;
+    rt->total_tasks_completed++;
+    
+    DEBUG_PRINT("[PTO Runtime] Completed task %d: %s (completed=%lld/%lld)\n", 
+           task_id, task->func_name, 
+           (long long)rt->total_tasks_completed, 
+           (long long)rt->total_tasks_scheduled);
+    
+    // Collect tasks that become ready
+    int32_t newly_ready[PTO_MAX_FANOUT];
+    int32_t newly_ready_count = 0;
+    
+    for (int i = 0; i < task->fanout_count; i++) {
+        int32_t dep_id = task->fanout[i];
+        PendingTask* dep = &rt->pend_task[dep_id];
+        
+        dep->fanin--;
+        DEBUG_PRINT("[PTO Runtime] Task %d fanin decremented to %d\n", dep_id, dep->fanin);
+        
+        if (dep->fanin == 0 && !dep->is_complete) {
+            newly_ready[newly_ready_count++] = dep_id;
+        }
+    }
+    
+    // Check if all tasks completed
+    bool all_done = (rt->total_tasks_completed >= rt->total_tasks_scheduled);
+    
+    pthread_mutex_unlock(&rt->task_mutex);
+    
+    // Add newly ready tasks to queue (outside task_mutex to avoid deadlock)
+    for (int i = 0; i < newly_ready_count; i++) {
+        ready_queue_push_threadsafe(rt, newly_ready[i]);
+        DEBUG_PRINT("[PTO Runtime] Task %d is now ready\n", newly_ready[i]);
+    }
+    
+    // Signal if all tasks are done
+    if (all_done) {
+        pthread_mutex_lock(&rt->queue_mutex);
+        pthread_cond_broadcast(&rt->all_done);
+        pthread_cond_broadcast(&rt->queue_not_empty);  // Wake up waiting workers
+        pthread_mutex_unlock(&rt->queue_mutex);
+    }
+}
+
 int32_t pto_get_ready_task(PTORuntime* rt) {
     return ready_queue_pop(rt);
 }
@@ -371,7 +503,7 @@ void pto_execute_all(PTORuntime* rt) {
         if (task->func_ptr) {
             // For now, just call the function pointer
             // In a real implementation, we would pass the arguments
-            InCoreFuncPtr func = (InCoreFuncPtr)task->func_ptr;
+            InCoreFuncPtr func __attribute__((unused)) = (InCoreFuncPtr)task->func_ptr;
             // Note: actual argument passing would require more sophisticated handling
             // func();  // Uncomment when function signatures are properly handled
             DEBUG_PRINT("[PTO Runtime] (Simulated execution of %s)\n", task->func_name);
@@ -651,6 +783,241 @@ int pto_runtime_dump_stdout(PTORuntime* rt) {
             pto_task_submit(rt, _tid); \
         } \
     } while(0)
+
+// =============================================================================
+// Multi-threaded Execution - Worker Thread and Runtime Entry
+// =============================================================================
+
+/**
+ * Worker thread context
+ */
+typedef struct {
+    PTORuntime* rt;
+    int worker_id;
+} WorkerContext;
+
+/**
+ * Execute a single task by calling its InCore function
+ */
+static void execute_task(PTORuntime* rt, int32_t task_id) {
+    PendingTask* task = &rt->pend_task[task_id];
+    
+    DEBUG_PRINT("[Worker] Executing task %d: %s\n", task_id, task->func_name);
+    
+    if (task->func_ptr) {
+        // Build argument array from task arguments
+        // Each TaskArg contains a TensorRegion with raw_tensor pointer and offsets
+        void* args[PTO_MAX_ARGS * 2];  // ptr, offset pairs
+        int arg_idx = 0;
+        
+        for (int i = 0; i < task->num_args; i++) {
+            TaskArg* arg = &task->args[i];
+            // Calculate actual pointer with offset
+            // Assuming float* tensors with row-major layout
+            float* base_ptr = (float*)arg->region.raw_tensor;
+            int64_t offset = arg->region.row_offset * arg->region.cols + arg->region.col_offset;
+            args[arg_idx++] = (void*)(base_ptr + offset);
+        }
+        
+        // Call the InCore function
+        // The function signature depends on the specific InCore function
+        // For simplicity, we use a generic approach here
+        PTOInCoreFunc func = (PTOInCoreFunc)task->func_ptr;
+        func(args, task->num_args);
+    } else {
+        // No function pointer - simulate execution
+        DEBUG_PRINT("[Worker] Task %d: %s (simulated - no func_ptr)\n", 
+               task_id, task->func_name);
+    }
+}
+
+/**
+ * Worker thread function
+ * Continuously fetches and executes tasks until shutdown
+ */
+static void* worker_thread_func(void* arg) {
+    WorkerContext* ctx = (WorkerContext*)arg;
+    PTORuntime* rt = ctx->rt;
+    int worker_id __attribute__((unused)) = ctx->worker_id;
+    
+    DEBUG_PRINT("[Worker %d] Started\n", worker_id);
+    
+    while (!rt->shutdown_requested) {
+        // Get next ready task (blocking)
+        int32_t task_id = pto_get_ready_task_blocking(rt);
+        
+        if (task_id < 0) {
+            // No task available - check if we should exit
+            if (rt->shutdown_requested) {
+                break;
+            }
+            // Check if all tasks are done
+            if (rt->execution_started && 
+                rt->total_tasks_completed >= rt->total_tasks_scheduled) {
+                break;
+            }
+            continue;
+        }
+        
+        // Execute the task
+        execute_task(rt, task_id);
+        
+        // Mark task as complete (updates dependencies, may wake other workers)
+        pto_task_complete_threadsafe(rt, task_id);
+    }
+    
+    DEBUG_PRINT("[Worker %d] Exiting\n", worker_id);
+    free(ctx);
+    return NULL;
+}
+
+/**
+ * ARM64 Runtime Entry Point
+ */
+int runtime_entry_arm64(PTOOrchFunc orch_func, void* user_data, int num_workers) {
+    if (!orch_func) {
+        fprintf(stderr, "[PTO Runtime] ERROR: No orchestration function provided\n");
+        return -1;
+    }
+    
+    if (num_workers < 1) num_workers = 1;
+    if (num_workers > PTO_MAX_WORKERS) num_workers = PTO_MAX_WORKERS;
+    
+    printf("[PTO Runtime] ========================================\n");
+    printf("[PTO Runtime] ARM64 Multi-threaded Execution\n");
+    printf("[PTO Runtime] Workers: %d\n", num_workers);
+    printf("[PTO Runtime] ========================================\n");
+    
+    // Allocate runtime on heap (PTORuntime can be large)
+    PTORuntime* rt = (PTORuntime*)malloc(sizeof(PTORuntime));
+    if (!rt) {
+        fprintf(stderr, "[PTO Runtime] ERROR: Failed to allocate runtime\n");
+        return -1;
+    }
+    
+    // Initialize runtime
+    pto_runtime_init(rt);
+    rt->num_workers = num_workers;
+    rt->shutdown_requested = false;
+    rt->execution_started = false;
+    
+    // Spawn worker threads
+    printf("[PTO Runtime] Spawning %d worker threads...\n", num_workers);
+    for (int i = 0; i < num_workers; i++) {
+        WorkerContext* ctx = (WorkerContext*)malloc(sizeof(WorkerContext));
+        if (!ctx) {
+            fprintf(stderr, "[PTO Runtime] ERROR: Failed to allocate worker context\n");
+            // Cleanup already spawned threads
+            rt->shutdown_requested = true;
+            pthread_cond_broadcast(&rt->queue_not_empty);
+            for (int j = 0; j < i; j++) {
+                pthread_join(rt->workers[j], NULL);
+            }
+            pto_runtime_shutdown(rt);
+            free(rt);
+            return -1;
+        }
+        ctx->rt = rt;
+        ctx->worker_id = i;
+        
+        if (pthread_create(&rt->workers[i], NULL, worker_thread_func, ctx) != 0) {
+            fprintf(stderr, "[PTO Runtime] ERROR: Failed to create worker thread %d\n", i);
+            free(ctx);
+            rt->shutdown_requested = true;
+            pthread_cond_broadcast(&rt->queue_not_empty);
+            for (int j = 0; j < i; j++) {
+                pthread_join(rt->workers[j], NULL);
+            }
+            pto_runtime_shutdown(rt);
+            free(rt);
+            return -1;
+        }
+    }
+    
+    // Build task graph by calling orchestration function
+    printf("[PTO Runtime] Building task graph...\n");
+    orch_func(rt, user_data);
+    
+    // Mark that orchestration is complete - all tasks are now submitted
+    pthread_mutex_lock(&rt->task_mutex);
+    rt->execution_started = true;
+    int64_t total_tasks = rt->total_tasks_scheduled;
+    pthread_mutex_unlock(&rt->task_mutex);
+    
+    printf("[PTO Runtime] Task graph built: %lld tasks\n", (long long)total_tasks);
+    printf("[PTO Runtime] Executing tasks...\n");
+    
+    // Wake up any workers that might be waiting
+    pthread_mutex_lock(&rt->queue_mutex);
+    pthread_cond_broadcast(&rt->queue_not_empty);
+    pthread_mutex_unlock(&rt->queue_mutex);
+    
+    // Wait for all tasks to complete
+    // We poll active_task_count periodically
+    struct timespec poll_interval = {0, 50000000};  // 50ms
+    while (1) {
+        pthread_mutex_lock(&rt->task_mutex);
+        bool all_done = (rt->total_tasks_completed >= rt->total_tasks_scheduled);
+        int64_t completed = rt->total_tasks_completed;
+        pthread_mutex_unlock(&rt->task_mutex);
+        
+        if (all_done) {
+            printf("[PTO Runtime] All %lld tasks completed!\n", (long long)completed);
+            break;
+        }
+        
+        // Progress report every 100ms or so
+        static int64_t last_reported = 0;
+        if (completed > last_reported + 1000 || completed == total_tasks) {
+            printf("[PTO Runtime] Progress: %lld / %lld tasks (%.1f%%)\n",
+                   (long long)completed, (long long)total_tasks,
+                   100.0 * completed / total_tasks);
+            last_reported = completed;
+        }
+        
+        nanosleep(&poll_interval, NULL);
+    }
+    
+    // Signal workers to shutdown
+    printf("[PTO Runtime] Shutting down workers...\n");
+    rt->shutdown_requested = true;
+    
+    // Wake up all workers
+    pthread_mutex_lock(&rt->queue_mutex);
+    pthread_cond_broadcast(&rt->queue_not_empty);
+    pthread_mutex_unlock(&rt->queue_mutex);
+    
+    // Wait for all workers to exit
+    for (int i = 0; i < num_workers; i++) {
+        pthread_join(rt->workers[i], NULL);
+    }
+    
+    // Print statistics
+    printf("[PTO Runtime] ========================================\n");
+    printf("[PTO Runtime] Execution Statistics\n");
+    printf("[PTO Runtime]   Total tasks: %lld\n", (long long)rt->total_tasks_scheduled);
+    printf("[PTO Runtime]   Completed:   %lld\n", (long long)rt->total_tasks_completed);
+    printf("[PTO Runtime]   Workers:     %d\n", num_workers);
+    printf("[PTO Runtime] ========================================\n");
+    
+    // Cleanup
+    pto_runtime_shutdown(rt);
+    free(rt);
+    
+    return 0;
+}
+
+/**
+ * Register an InCore function (for lookup by name)
+ */
+void pto_register_incore_func(PTORuntime* rt, const char* func_name, PTOInCoreFunc func_ptr) {
+    // For now, we store the function pointer directly in task->func_ptr when allocating
+    // This function is a placeholder for a more sophisticated registry
+    DEBUG_PRINT("[PTO Runtime] Registered InCore function: %s\n", func_name);
+    (void)rt;
+    (void)func_name;
+    (void)func_ptr;
+}
 
 // =============================================================================
 // Example: Generated Orchestration Function

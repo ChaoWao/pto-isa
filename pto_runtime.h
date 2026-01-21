@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
 
 // =============================================================================
 // Configuration
@@ -32,6 +33,7 @@
 #define PTO_MAX_ARGS           16      // Maximum arguments per task
 #define PTO_TENSORMAP_SIZE     16384   // Hash table size for tensor map
 #define PTO_MAX_READY_QUEUE    4096    // Ready queue size
+#define PTO_MAX_WORKERS        64      // Maximum worker threads
 
 // =============================================================================
 // Data Structures
@@ -113,6 +115,26 @@ typedef struct {
     // Statistics
     int64_t      total_tasks_scheduled;
     int64_t      total_tasks_completed;
+    
+    // ==========================================================================
+    // Multi-threaded execution support
+    // ==========================================================================
+    
+    // Thread synchronization
+    pthread_mutex_t   queue_mutex;           // Protects ready_queue access
+    pthread_mutex_t   task_mutex;            // Protects task state updates
+    pthread_cond_t    queue_not_empty;       // Signaled when task added to queue
+    pthread_cond_t    all_done;              // Signaled when all tasks complete
+    
+    // Worker threads
+    pthread_t         workers[PTO_MAX_WORKERS];
+    int32_t           num_workers;           // Number of worker threads
+    volatile bool     shutdown_requested;    // Signal workers to exit
+    volatile bool     execution_started;     // Orchestration has submitted all tasks
+    
+    // InCore function registry (maps func_name to actual function pointer)
+    // This is populated before execution starts
+    void*             func_registry[PTO_MAX_TASKS];  // Indexed by task_id after lookup
 } PTORuntime;
 
 // =============================================================================
@@ -176,9 +198,66 @@ void pto_task_complete(PTORuntime* rt, int32_t task_id);
 int32_t pto_get_ready_task(PTORuntime* rt);
 
 /**
- * Execute all pending tasks until completion
+ * Execute all pending tasks until completion (single-threaded)
  */
 void pto_execute_all(PTORuntime* rt);
+
+// =============================================================================
+// Multi-threaded Execution API
+// =============================================================================
+
+/**
+ * InCore function signature for ARM64
+ * All InCore functions must match this signature
+ */
+typedef void (*PTOInCoreFunc)(void** args, int32_t num_args);
+
+/**
+ * Orchestration function signature
+ * Called to build the task graph
+ */
+typedef void (*PTOOrchFunc)(PTORuntime* rt, void* user_data);
+
+/**
+ * Register an InCore function with the runtime
+ * @param rt        Runtime context
+ * @param func_name Name of the InCore function
+ * @param func_ptr  Function pointer (must match PTOInCoreFunc signature)
+ */
+void pto_register_incore_func(PTORuntime* rt, const char* func_name, PTOInCoreFunc func_ptr);
+
+/**
+ * ARM64 Runtime Entry Point - Multi-threaded task execution
+ * 
+ * This is the main entry point for executing PTO programs on ARM64.
+ * 
+ * Execution flow:
+ * 1. Initialize runtime and spawn worker threads
+ * 2. Call orchestration function to build task graph
+ * 3. Workers execute tasks from ready queue in parallel
+ * 4. Wait for all tasks to complete
+ * 5. Shutdown workers and cleanup
+ * 
+ * @param orch_func     Orchestration function that builds the task graph
+ * @param user_data     User data passed to orchestration function
+ * @param num_workers   Number of worker threads (1-PTO_MAX_WORKERS)
+ * @return 0 on success, -1 on failure
+ */
+int runtime_entry_arm64(PTOOrchFunc orch_func, void* user_data, int num_workers);
+
+/**
+ * Thread-safe version of pto_get_ready_task
+ * Blocks until a task is available or shutdown is requested
+ * @param rt Runtime context
+ * @return task_id or -1 if shutdown
+ */
+int32_t pto_get_ready_task_blocking(PTORuntime* rt);
+
+/**
+ * Thread-safe version of pto_task_complete
+ * Updates dependencies and signals waiting workers
+ */
+void pto_task_complete_threadsafe(PTORuntime* rt, int32_t task_id);
 
 /**
  * Print runtime statistics
