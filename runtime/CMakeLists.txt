@@ -21,7 +21,7 @@ add_subdirectory(aicpu)
 add_subdirectory(aicore)
 
 # Compile host graph executor
-add_executable(graph_executor graphbuilder.cpp graph/graph.cpp)
+add_executable(graph_executor graphbuilder.cpp devicerunner.cpp memoryallocator.cpp graph/graph.cpp)
 
 target_include_directories(graph_executor PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
