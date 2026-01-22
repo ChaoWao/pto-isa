@@ -40,7 +40,8 @@ set(AI_CORE_FLAGS
     -mllvm -cce-aicore-dcci-insert-for-scalar=false \
     -DMEMORY_BASE \
     -I${PTO_ISA_ROOT}/include \
-    -I${PTO_ISA_ROOT}/include/pto"
+    -I${PTO_ISA_ROOT}/include/pto \
+    -I${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 separate_arguments(AI_CORE_FLAGS)
 

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <pto/pto-inst.hpp>
 #include <pto/common/constants.hpp>
+#include "../common/handshake.h"
+#include "../graph/graph.h"
 
 #ifndef __gm__
 #define __gm__
@@ -38,13 +40,6 @@
 
 using namespace pto;
 
-struct Handshake {
-    volatile uint32_t aicpu_ready;
-    volatile uint32_t aicore_done;
-    volatile int32_t control;  // 0=execute, 1=quit
-    volatile int32_t task;     // task ID: -1=none, 0=TADD, etc.
-} __attribute__((aligned(64)));
-
 // TADD implementation (float path)
 template <typename T, int kTRows_, int kTCols_, int vRows, int vCols>
 __aicore__ __attribute__((always_inline)) void runTAdd(__gm__ T __out__ *out, __gm__ T __in__ *src0, __gm__ T __in__ *src1)
@@ -75,17 +70,39 @@ __aicore__ __attribute__((always_inline)) void runTAdd(__gm__ T __out__ *out, __
     TSTORE(dstGlobal, dstTile);
 }
 
-// Task execution wrapper
-__aicore__ __attribute__((always_inline)) static void execute_task(int32_t task_id)
+/**
+ * Task execution wrapper - dispatches tasks based on function ID
+ *
+ * This function executes a task on the AICore. The task pointer is provided
+ * by AICPU through the handshake buffer and contains:
+ * - func_id: identifies which function to execute (0 = TADD, etc.)
+ * - args: function-specific arguments
+ * - dependency metadata (fanin/fanout)
+ *
+ * @param task Pointer to task in global memory (null during initialization)
+ */
+__aicore__ __attribute__((always_inline)) static void execute_task(__gm__ Task* task)
 {
-    switch(task_id) {
-        case 0:  // TADD task
-#ifdef __AIV__
-                // runTAdd<float, 64, 64, 64, 64>(out, src0, src1);
-#endif
+    // Null task pointer indicates no work assigned (initialization state)
+    if (task == nullptr) {
+        return;
+    }
+
+    // TODO: Replace with actual task execution
+    // Placeholder busy-loop simulating computation time
+    int cycle = 0;
+    while (cycle < 10000) {
+        cycle++;
+    }
+
+    // Dispatch to specific function based on task->func_id
+    switch(task->func_id) {
+        case 0:  // TADD operation (currently disabled)
+            // TODO: Uncomment and pass actual arguments from task->args
+            // runTAdd<float, 64, 64, 64, 64>(out, src0, src1);
             break;
         default:
-            // Unknown task, do nothing
+            // Unknown function ID - skip execution
             break;
     }
 }
@@ -93,9 +110,17 @@ __aicore__ __attribute__((always_inline)) static void execute_task(int32_t task_
 /**
  * Kernel entry point with control loop
  *
- * This function is called by the runtime when kernel is launched.
- * It waits for tasks from AICPU and executes them based on control flags.
+ * This function implements the AICore-side task execution protocol:
+ * 1. Wait for AICPU ready signal (handshake initialization)
+ * 2. Signal AICore is ready (aicore_done = core_id + 1)
+ * 3. Enter polling loop:
+ *    - Check control flag (1 = quit, 0 = continue)
+ *    - If task pointer is non-zero, execute task and mark as complete
+ *    - Use DCCI to ensure cache coherency with AICPU
+ *
  * Each core (AIC or AIV) gets its own handshake buffer indexed by blockIdx.
+ *
+ * @param hank Array of handshake buffers (one per core)
  */
 extern "C" __global__ __aicore__ void KERNEL_ENTRY(aicore_kernel)(__gm__ struct Handshake* hank) {
     // Calculate blockIdx for this core
@@ -108,22 +133,29 @@ extern "C" __global__ __aicore__ void KERNEL_ENTRY(aicore_kernel)(__gm__ struct 
     // Get this core's handshake buffer
     __gm__ Handshake* my_hank = &hank[blockIdx];
 
-    // Wait for AICPU signal
+    // Phase 1: Wait for AICPU initialization signal
     while (my_hank->aicpu_ready == 0) {
         dcci(my_hank, ENTIRE_DATA_CACHE, CACHELINE_OUT);
     }
-    // Signal completion
+
+    // Phase 2: Signal AICore is ready (use core_id + 1 to avoid 0)
     my_hank->aicore_done = blockIdx + 1;
+
+    // Phase 3: Main execution loop - poll for tasks until quit signal
     while (true) {
         dcci(my_hank, ENTIRE_DATA_CACHE, CACHELINE_OUT);
-        // Read control flag
+
+        // Check for quit command from AICPU
         if (my_hank->control == 1) {
-            break;  // Quit command
+            break;  // Exit kernel
         }
 
-        // Execute task if valid
-        if (my_hank->task != -1) {
-            execute_task(my_hank->task);
+        // Execute task if assigned (task != 0 means valid Task* pointer)
+        if (my_hank->task != 0) {
+            __gm__ Task* task_ptr = reinterpret_cast<__gm__ Task*>(my_hank->task);
+            execute_task(task_ptr);
+            // Mark task as complete (task_status: 0=idle, 1=busy)
+            my_hank->task_status = 0;
         }
     }
 }

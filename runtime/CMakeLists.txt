@@ -16,6 +16,7 @@ else()
 endif()
 
 # Compile kernels
+add_subdirectory(common)
 add_subdirectory(aicpu)
 add_subdirectory(aicore)
 

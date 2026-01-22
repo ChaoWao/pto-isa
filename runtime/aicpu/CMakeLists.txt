@@ -15,7 +15,7 @@ set(CMAKE_C_COMPILER "${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarc
 set(CMAKE_CXX_COMPILER "${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++")
 
 add_library(aicpu_graph_kernel SHARED)
-target_sources(aicpu_graph_kernel PRIVATE hello_world.cpp device_log.cpp ../graph/graph.cpp)
+target_sources(aicpu_graph_kernel PRIVATE graph_executor.cpp device_log.cpp ../graph/graph.cpp)
 
 target_compile_options(aicpu_graph_kernel
         PRIVATE
@@ -35,6 +35,8 @@ target_compile_options(aicpu_graph_kernel
 target_include_directories(aicpu_graph_kernel
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/..
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../graph
         PRIVATE

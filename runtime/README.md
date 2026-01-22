@@ -7,7 +7,7 @@ This example demonstrates how to create and launch an AICPU kernel using CANN ru
 ```
 03-aicpu-kernel/
 ├── kernel/                          # AICPU kernel code
-│   ├── hello_world.cpp              # Kernel implementation with entry points
+│   ├── graph_executor.cpp           # Kernel implementation with entry points
 │   └── CMakeLists.txt               # Build configuration for kernel
 ├── launcher.cpp                     # Host-side launcher
 ├── CMakeLists.txt                   # Main build configuration
@@ -16,7 +16,7 @@ This example demonstrates how to create and launch an AICPU kernel using CANN ru
 
 ## Components
 
-### 1. Kernel Code (`kernel/hello_world.cpp`)
+### 1. Kernel Code (`kernel/graph_executor.cpp`)
 
 The AICPU kernel implements three entry points that are called by the system's `libaicpu_extend_kernels.so`:
 

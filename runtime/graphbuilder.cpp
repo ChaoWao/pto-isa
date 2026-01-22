@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 #include "graph/graph.h"
+#include "common/handshake.h"
+#include "common/kernel_args.h"
 #include <assert.h>
 
 /**
@@ -24,7 +26,7 @@
  *   2. the offset from DeviceArgs to aicpuSoBin
  *   3. the offset from DeviceArgs to aicpuSoLen
  * which are a hardcoded in the AICPU kernel("libaicpu_extend_kernels.so").
- * There are also hardcoded three function names(see hello_world.cpp):
+ * There are also hardcoded three function names(see graph_executor.cpp):
  *   1. StaticTileFwkBackendKernelServer
  *   2. DynTileFwkBackendKernelServerInit
  *   3. DynTileFwkBackendKernelServer
@@ -56,16 +58,23 @@ static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {//以�
     return 0;
 }
 
-struct KernelArgs {
-    uint64_t unused[5] = {0};
-    int64_t *deviceArgs{nullptr};
-    int64_t *hankArgs{nullptr};
-    int64_t core_num;
-    Graph *graphArgs{nullptr};
+/**
+ * Helper class that extends KernelArgs with initialization methods for host
+ *
+ * This class wraps KernelArgs and provides host-side initialization methods
+ * for allocating device memory and copying data to the device. It separates
+ * the concerns of device memory management (host-only) from the structure
+ * layout (shared with kernels).
+ *
+ * The helper provides implicit conversion to KernelArgs* for seamless use
+ * with runtime APIs.
+ */
+struct KernelArgsHelper {
+    KernelArgs args;
 
     int InitDeviceArgs(const DeviceArgs &hostDeviceArgs) {
         // Allocate device memory for deviceArgs
-        if (deviceArgs == nullptr) {
+        if (args.deviceArgs == nullptr) {
             void *deviceArgsDev = nullptr;
             uint64_t deviceArgsSize = sizeof(DeviceArgs);
             int allocRc = rtMalloc(&deviceArgsDev, deviceArgsSize, RT_MEMORY_HBM, 0);
@@ -73,31 +82,31 @@ struct KernelArgs {
                 std::cerr << "Error: rtMalloc for deviceArgs failed: " << allocRc << '\n';
                 return allocRc;
             }
-            deviceArgs = reinterpret_cast<int64_t *>(deviceArgsDev);
+            args.deviceArgs = reinterpret_cast<int64_t *>(deviceArgsDev);
         }
         // Copy hostDeviceArgs to device memory via deviceArgs
         int rc =
-            rtMemcpy(deviceArgs, sizeof(DeviceArgs), &hostDeviceArgs, sizeof(DeviceArgs), RT_MEMCPY_HOST_TO_DEVICE);
+            rtMemcpy(args.deviceArgs, sizeof(DeviceArgs), &hostDeviceArgs, sizeof(DeviceArgs), RT_MEMCPY_HOST_TO_DEVICE);
         if (rc != 0) {
             std::cerr << "Error: rtMemcpy failed: " << rc << '\n';
-            rtFree(deviceArgs);
-            deviceArgs = nullptr;
+            rtFree(args.deviceArgs);
+            args.deviceArgs = nullptr;
             return rc;
         }
         return 0;
     }
 
     int FinalizeDeviceArgs() {
-        if (deviceArgs != nullptr) {
-            int rc = rtFree(deviceArgs);
-            deviceArgs = nullptr;
+        if (args.deviceArgs != nullptr) {
+            int rc = rtFree(args.deviceArgs);
+            args.deviceArgs = nullptr;
             return rc;
         }
         return 0;
     }
 
     int InitGraphArgs(const Graph& hostGraph) {
-        if (graphArgs == nullptr) {
+        if (args.graphArgs == nullptr) {
             void *graphDev = nullptr;
             uint64_t graphSize = sizeof(Graph);
             int allocRc = rtMalloc(&graphDev, graphSize, RT_MEMORY_HBM, 0);
@@ -105,26 +114,37 @@ struct KernelArgs {
                 std::cerr << "Error: rtMalloc for graphArgs failed: " << allocRc << '\n';
                 return allocRc;
             }
-            graphArgs = reinterpret_cast<Graph*>(graphDev);
+            args.graphArgs = reinterpret_cast<Graph*>(graphDev);
         }
-        int rc = rtMemcpy(graphArgs, sizeof(Graph), &hostGraph, sizeof(Graph), RT_MEMCPY_HOST_TO_DEVICE);
+        int rc = rtMemcpy(args.graphArgs, sizeof(Graph), &hostGraph, sizeof(Graph), RT_MEMCPY_HOST_TO_DEVICE);
         if (rc != 0) {
             std::cerr << "Error: rtMemcpy for graph failed: " << rc << '\n';
-            rtFree(graphArgs);
-            graphArgs = nullptr;
+            rtFree(args.graphArgs);
+            args.graphArgs = nullptr;
             return rc;
         }
         return 0;
     }
 
     int FinalizeGraphArgs() {
-        if (graphArgs != nullptr) {
-            int rc = rtFree(graphArgs);
-            graphArgs = nullptr;
+        if (args.graphArgs != nullptr) {
+            int rc = rtFree(args.graphArgs);
+            args.graphArgs = nullptr;
             return rc;
         }
         return 0;
     }
+
+    /**
+     * Implicit conversion operators for seamless use with runtime APIs
+     *
+     * These operators allow KernelArgsHelper to be used wherever KernelArgs*
+     * is expected, enabling transparent device memory management while
+     * maintaining API compatibility.
+     */
+    // Allow implicit conversion to KernelArgs*
+    operator KernelArgs*() { return &args; }
+    KernelArgs* operator&() { return &args; }
 };
 
 struct AicpuSoInfo {
@@ -172,13 +192,6 @@ struct AicpuSoInfo {
         return 0;
     }
 };
-
-struct Handshake {
-    volatile uint32_t aicpu_ready;
-    volatile uint32_t aicore_done;
-    volatile int32_t control;  // 0=execute, 1=quit
-    volatile int32_t task;     // task ID: -1=none, 0=TADD, etc.
-} __attribute__((aligned(64)));
 
 class DeviceRunner {
   public:
@@ -329,12 +342,20 @@ int main(int argc, char **argv) {
 
     constexpr int NUM_CORES = 3;  // 1 AIC + 2 AIV cores for 1c2v architecture
     Handshake hankArgs[NUM_CORES] = {};
-    // Initialize all cores' handshake buffers
+
+    // Initialize all cores' handshake buffers to default state
+    // Protocol initial state:
+    //   - aicpu_ready=0: AICPU will set to 1 when ready
+    //   - aicore_done=0: AICore will set to core_id+1 when ready
+    //   - control=0: Execute mode (1=quit)
+    //   - task=0: No task assigned
+    //   - task_status=0: Idle state
     for (int i = 0; i < NUM_CORES; i++) {
         hankArgs[i].aicpu_ready = 0;
         hankArgs[i].aicore_done = 0;
-        hankArgs[i].control = 0;  // 0=execute
-        hankArgs[i].task = -1;    // -1=no task initially
+        hankArgs[i].control = 0;      // 0=execute
+        hankArgs[i].task = 0;         // 0=no task initially
+        hankArgs[i].task_status = 0;  // 0=idle
     }
 
     // Parse device id from main's argument (expected range: 0-15)
@@ -383,13 +404,13 @@ int main(int argc, char **argv) {
         return rc;
     }
 
-    KernelArgs kernelArgs{};
+    KernelArgsHelper kernelArgs{};
     DeviceArgs deviceArgs{};
     deviceArgs.aicpuSoBin = soInfo.aicpuSoBin;
     deviceArgs.aicpuSoLen = soInfo.aicpuSoLen;
     rc = kernelArgs.InitDeviceArgs(deviceArgs);
 
-    MvHankArg(kernelArgs, hankArgs, NUM_CORES);
+    MvHankArg(kernelArgs.args, hankArgs, NUM_CORES);
 
     if (rc != 0) {
         std::cerr << "Error: KernelArgs::InitDeviceArgs failed: " << rc << '\n';
@@ -402,14 +423,25 @@ int main(int argc, char **argv) {
     }
 
     // Create a test graph to pass to the kernel
+    // Graph topology: Diamond DAG pattern
+    //     t0
+    //    /  \
+    //   t1  t2
+    //    \  /
+    //     t3
+    // This tests parallel execution (t1 and t2 can run concurrently)
+    // and synchronization (t3 waits for both t1 and t2)
     std::cout << "\n=== Creating Test Graph for Kernel ===" << '\n';
     Graph testGraph;
     uint64_t args[] = {1, 2, 3};
     int t0 = testGraph.add_task(args, 3, 0);
     int t1 = testGraph.add_task(args, 3, 1);
     int t2 = testGraph.add_task(args, 3, 2);
-    testGraph.add_successor(t0, t1);
-    testGraph.add_successor(t1, t2);
+    int t3 = testGraph.add_task(args, 3, 3);
+    testGraph.add_successor(t0, t1);  // t0 → t1
+    testGraph.add_successor(t0, t2);  // t0 → t2
+    testGraph.add_successor(t1, t3);  // t1 → t3
+    testGraph.add_successor(t2, t3);  // t2 → t3
     std::cout << "Created graph with " << testGraph.get_task_count() << " tasks in a pipeline\n";
     testGraph.print_graph();
 
@@ -429,7 +461,7 @@ int main(int argc, char **argv) {
 
     DeviceRunner &runner = DeviceRunner::Get();
     int launchAicpuNum = 1;
-    rc = runner.Run(streamAicpu, streamAicore, &kernelArgs, launchAicpuNum);
+    rc = runner.Run(streamAicpu, streamAicore, &kernelArgs.args, launchAicpuNum);
 
     rc = rtStreamSynchronize(streamAicpu);
     if (rc != 0) {
@@ -443,7 +475,7 @@ int main(int argc, char **argv) {
         return rc;
     }
 
-    PrintResult(kernelArgs, NUM_CORES);
+    PrintResult(kernelArgs.args, NUM_CORES);
     kernelArgs.FinalizeGraphArgs();
     kernelArgs.FinalizeDeviceArgs();
     soInfo.Finalize();
