@@ -2,6 +2,7 @@
 #include "../graph/graph.h"
 #include "../graph/handshake.h"
 #include "../graph/kernel_args.h"
+#include "../graph/aicpu_func.h"
 #include <cstdint>
 #include <cstdio>
 #include <sched.h>
@@ -248,13 +249,22 @@ extern "C" __attribute__((visibility("default"))) int DynTileFwkBackendKernelSer
     }
 
     // Step 2: Execute task graph if provided
+    // Control flow and scheduling are delegated to user-defined functions
     if (kargs->graphArgs != nullptr) {
         Graph* g = kargs->graphArgs;
         Handshake* hank = (Handshake*)kargs->hankArgs;
         int core_num = kargs->core_num;
         DEV_INFO("Graph has %d tasks", g->get_task_count());
-        int completed = execute_graph(*g, hank, core_num);
-        DEV_INFO("Executed %d tasks from graph", completed);
+
+        // User-defined control flow logic
+        DEV_INFO("Calling user-defined Control function");
+        Control(*g, hank, core_num);
+
+        // User-defined scheduling logic
+        DEV_INFO("Calling user-defined Schdule function");
+        Schdule(*g, hank, core_num);
+
+        DEV_INFO("User-defined control and scheduling completed");
     }
 
     // Step 3: Shutdown all AICore instances
