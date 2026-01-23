@@ -40,13 +40,14 @@ public:
      * Compilation flags used:
      * - -c -O3 -g -x cce
      * - --cce-aicore-only
-     * - --cce-aicore-arch=dav-c220-cube
-     * - -D__AIC__
+     * - --cce-aicore-arch=dav-c220-cube (AIC) or dav-c220-vec (AIV)
+     * - -D__AIC__ (for AIC) or -D__AIV__ (for AIV)
      * - Stack size and overflow flags
      * - Include paths for PTO-ISA headers
      *
      * @param sourcePath  Path to kernel source file (.cpp)
      * @param ptoIsaRoot  Path to PTO-ISA root directory (headers location)
+     * @param coreType    Core type: 0=AIC, 1=AIV (determines arch and define flags)
      * @param outputPath  Output parameter - path to compiled .o file
      * @param errorMsg    Output parameter - error message if compilation fails
      * @return 0 on success, -1 on error
@@ -56,6 +57,7 @@ public:
      *   int rc = KernelCompiler::CompileKernel(
      *       "./aicore/kernels/kernel_mul.cpp",
      *       "/path/to/pto-isa",
+     *       1,  // AIV
      *       outputPath,
      *       errorMsg
      *   );
@@ -65,6 +67,7 @@ public:
      */
     static int CompileKernel(const std::string& sourcePath,
                             const std::string& ptoIsaRoot,
+                            int coreType,
                             std::string& outputPath,
                             std::string& errorMsg);
 
@@ -95,12 +98,14 @@ private:
      * @param sourcePath    Path to source file
      * @param outputPath    Path to output .o file
      * @param ptoIsaRoot    Path to PTO-ISA headers
+     * @param coreType      Core type: 0=AIC, 1=AIV
      * @return Complete compilation command
      */
     static std::string BuildCompileCommand(const std::string& compilerPath,
                                           const std::string& sourcePath,
                                           const std::string& outputPath,
-                                          const std::string& ptoIsaRoot);
+                                          const std::string& ptoIsaRoot,
+                                          int coreType);
 };
 
 #endif  // RUNTIME_KERNEL_COMPILER_H

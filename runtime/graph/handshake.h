@@ -38,6 +38,7 @@ extern "C" {
  * - task: Written by AICPU, read by AICore (0 = no task assigned)
  * - task_status: Written by both (AICPU=1 on dispatch, AICore=0 on completion)
  * - control: Written by AICPU, read by AICore (0 = continue, 1 = quit)
+ * - core_type: Written by AICPU, read by AICore (0 = AIC, 1 = AIV)
  */
 struct Handshake {
     volatile uint32_t aicpu_ready;   // AICPU ready signal: 0=not ready, 1=ready
@@ -45,6 +46,8 @@ struct Handshake {
     volatile uint64_t task;          // Task pointer: 0=no task, non-zero=Task* address
     volatile int32_t task_status;    // Task execution status: 0=idle, 1=busy
     volatile int32_t control;        // Control signal: 0=execute, 1=quit
+    volatile int32_t core_type;      // Core type: 0=AIC, 1=AIV
+    volatile int32_t padding;        // Padding to maintain 64-byte alignment
 } __attribute__((aligned(64)));
 
 #ifdef __cplusplus

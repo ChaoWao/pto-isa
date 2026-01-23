@@ -16,6 +16,7 @@
 
 int KernelCompiler::CompileKernel(const std::string& sourcePath,
                                   const std::string& ptoIsaRoot,
+                                  int coreType,
                                   std::string& outputPath,
                                   std::string& errorMsg) {
     // Step 1: Get compiler path
@@ -43,10 +44,11 @@ int KernelCompiler::CompileKernel(const std::string& sourcePath,
     outputPath = GenerateOutputPath();
 
     // Step 5: Build compilation command
-    std::string command = BuildCompileCommand(compilerPath, sourcePath, outputPath, ptoIsaRoot);
+    std::string command = BuildCompileCommand(compilerPath, sourcePath, outputPath, ptoIsaRoot, coreType);
 
     // Step 6: Execute compilation
-    std::cout << "Compiling kernel: " << sourcePath << std::endl;
+    const char* coreTypeName = (coreType == 1) ? "AIV" : "AIC";
+    std::cout << "Compiling kernel (" << coreTypeName << "): " << sourcePath << std::endl;
     std::cout << "Command: " << command << std::endl;
 
     // Redirect stderr to capture compiler output
@@ -138,7 +140,8 @@ std::string KernelCompiler::GenerateOutputPath() {
 std::string KernelCompiler::BuildCompileCommand(const std::string& compilerPath,
                                                const std::string& sourcePath,
                                                const std::string& outputPath,
-                                               const std::string& ptoIsaRoot) {
+                                               const std::string& ptoIsaRoot,
+                                               int coreType) {
     std::ostringstream cmd;
 
     // Compiler executable
@@ -148,10 +151,15 @@ std::string KernelCompiler::BuildCompileCommand(const std::string& compilerPath,
     cmd << " -c -O3 -g -x cce";
     cmd << " -Wall -std=c++17";
 
-    // AICore-specific flags
+    // AICore-specific flags based on core type
     cmd << " --cce-aicore-only";
-    cmd << " --cce-aicore-arch=dav-c220-cube";
-    cmd << " -D__AIC__";
+    if (coreType == 1) {  // AIV
+        cmd << " --cce-aicore-arch=dav-c220-vec";
+        cmd << " -D__AIV__";
+    } else {  // AIC
+        cmd << " --cce-aicore-arch=dav-c220-cube";
+        cmd << " -D__AIC__";
+    }
 
     // Stack and memory flags
     cmd << " -mllvm -cce-aicore-stack-size=0x8000";

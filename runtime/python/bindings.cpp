@@ -21,7 +21,7 @@ PYBIND11_MODULE(pto_runtime, m) {
         .def(py::init<>(), "Create a new empty graph")
 
         .def("add_task",
-            [](Graph& self, py::list args, int func_id) {
+            [](Graph& self, py::list args, int func_id, int core_type) {
                 // Convert Python list to uint64_t array
                 std::vector<uint64_t> args_vec;
                 for (auto item : args) {
@@ -37,13 +37,14 @@ PYBIND11_MODULE(pto_runtime, m) {
                         throw std::runtime_error("Task arguments must be integers or floats");
                     }
                 }
-                return self.add_task(args_vec.data(), args_vec.size(), func_id);
+                return self.add_task(args_vec.data(), args_vec.size(), func_id, core_type);
             },
-            py::arg("args"), py::arg("func_id"),
-            "Add a task to the graph with the given arguments and function ID.\n"
+            py::arg("args"), py::arg("func_id") = 0, py::arg("core_type") = 1,
+            "Add a task to the graph with the given arguments, function ID, and core type.\n"
             "Args:\n"
             "    args: List of arguments (integers or floats)\n"
-            "    func_id: Function identifier\n"
+            "    func_id: Function identifier (default: 0)\n"
+            "    core_type: Core type (0=AIC, 1=AIV, default: 1)\n"
             "Returns:\n"
             "    Task ID (integer)")
 
@@ -80,12 +81,13 @@ PYBIND11_MODULE(pto_runtime, m) {
             "    0 on success, error code on failure")
 
         .def("compile_and_load_kernel", &DeviceRunner::CompileAndLoadKernel,
-            py::arg("func_id"), py::arg("kernel_path"), py::arg("pto_isa_root"),
+            py::arg("func_id"), py::arg("kernel_path"), py::arg("pto_isa_root"), py::arg("core_type") = 1,
             "Compile and load a kernel at runtime.\n"
             "Args:\n"
             "    func_id: Function identifier for this kernel\n"
             "    kernel_path: Path to kernel source file (.cpp)\n"
             "    pto_isa_root: Path to PTO-ISA root directory\n"
+            "    core_type: Core type (0=AIC, 1=AIV, default: 1)\n"
             "Returns:\n"
             "    0 on success, error code on failure")
 

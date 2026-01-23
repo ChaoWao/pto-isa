@@ -54,24 +54,24 @@ int main(int argc, char **argv) {
         std::cout << "PTO_ISA_ROOT not set, using default: " << ptoIsaRoot << '\n';
     }
 
-    // Compile and load kernel_add (func_id=0)
-    rc = runner.CompileAndLoadKernel(0, "kernels/kernel_add.cpp", ptoIsaRoot);
+    // Compile and load kernel_add (func_id=0, AIV core)
+    rc = runner.CompileAndLoadKernel(0, "kernels/aiv/kernel_add.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add" << '\n';
         runner.Finalize();
         return rc;
     }
 
-    // Compile and load kernel_add_scalar (func_id=1)
-    rc = runner.CompileAndLoadKernel(1, "kernels/kernel_add_scalar.cpp", ptoIsaRoot);
+    // Compile and load kernel_add_scalar (func_id=1, AIV core)
+    rc = runner.CompileAndLoadKernel(1, "kernels/aiv/kernel_add_scalar.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add_scalar" << '\n';
         runner.Finalize();
         return rc;
     }
 
-    // Compile and load kernel_mul (func_id=2)
-    rc = runner.CompileAndLoadKernel(2, "kernels/kernel_mul.cpp", ptoIsaRoot);
+    // Compile and load kernel_mul (func_id=2, AIV core)
+    rc = runner.CompileAndLoadKernel(2, "kernels/aiv/kernel_mul.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_mul" << '\n';
         runner.Finalize();
@@ -145,39 +145,39 @@ int main(int argc, char **argv) {
         uint64_t u64;
     } scalar_converter;
 
-    // Task 0: c = a + b (func_id=0: kernel_add)
+    // Task 0: c = a + b (func_id=0: kernel_add, AIV core)
     uint64_t args_t0[4];
     args_t0[0] = reinterpret_cast<uint64_t>(dev_a);  // src0
     args_t0[1] = reinterpret_cast<uint64_t>(dev_b);  // src1
     args_t0[2] = reinterpret_cast<uint64_t>(dev_c);  // out
     args_t0[3] = SIZE;                                // size
-    int t0 = testGraph.add_task(args_t0, 4, 0);
+    int t0 = testGraph.add_task(args_t0, 4, 0, 1);   // core_type=1 (AIV)
 
-    // Task 1: d = c + 1 (func_id=1: kernel_add_scalar)
+    // Task 1: d = c + 1 (func_id=1: kernel_add_scalar, AIV core)
     uint64_t args_t1[4];
     args_t1[0] = reinterpret_cast<uint64_t>(dev_c);  // src
     scalar_converter.f32 = 1.0f;
     args_t1[1] = scalar_converter.u64;                // scalar=1.0
     args_t1[2] = reinterpret_cast<uint64_t>(dev_d);  // out
     args_t1[3] = SIZE;                                // size
-    int t1 = testGraph.add_task(args_t1, 4, 1);
+    int t1 = testGraph.add_task(args_t1, 4, 1, 1);   // core_type=1 (AIV)
 
-    // Task 2: e = c + 2 (func_id=1: kernel_add_scalar)
+    // Task 2: e = c + 2 (func_id=1: kernel_add_scalar, AIV core)
     uint64_t args_t2[4];
     args_t2[0] = reinterpret_cast<uint64_t>(dev_c);  // src
     scalar_converter.f32 = 2.0f;
     args_t2[1] = scalar_converter.u64;                // scalar=2.0
     args_t2[2] = reinterpret_cast<uint64_t>(dev_e);  // out
     args_t2[3] = SIZE;                                // size
-    int t2 = testGraph.add_task(args_t2, 4, 1);
+    int t2 = testGraph.add_task(args_t2, 4, 1, 1);   // core_type=1 (AIV)
 
-    // Task 3: f = d * e (func_id=2: kernel_mul)
+    // Task 3: f = d * e (func_id=2: kernel_mul, AIV core)
     uint64_t args_t3[4];
     args_t3[0] = reinterpret_cast<uint64_t>(dev_d);  // src0
     args_t3[1] = reinterpret_cast<uint64_t>(dev_e);  // src1
     args_t3[2] = reinterpret_cast<uint64_t>(dev_f);  // out
     args_t3[3] = SIZE;                                // size
-    int t3 = testGraph.add_task(args_t3, 4, 2);
+    int t3 = testGraph.add_task(args_t3, 4, 2, 1);   // core_type=1 (AIV)
 
     // Add dependencies
     testGraph.add_successor(t0, t1);  // t0 → t1

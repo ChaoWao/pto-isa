@@ -22,7 +22,7 @@ Graph::Graph() {
 // Task Management
 // =============================================================================
 
-int Graph::add_task(uint64_t* args, int num_args, int func_id) {
+int Graph::add_task(uint64_t* args, int num_args, int func_id, int core_type) {
     // Check bounds
     if (next_task_id >= GRAPH_MAX_TASKS) {
         fprintf(stderr, "[Graph] ERROR: Task table full (max=%d)\n", GRAPH_MAX_TASKS);
@@ -47,6 +47,7 @@ int Graph::add_task(uint64_t* args, int num_args, int func_id) {
         memcpy(task->args, args, num_args * sizeof(uint64_t));
     }
     task->functionBinAddr = 0;  // Will be set by host before copying to device
+    task->core_type = core_type;  // Set core type (0=AIC, 1=AIV)
     task->fanin = 0;
     task->fanout_count = 0;
     memset(task->fanout, 0, sizeof(task->fanout));

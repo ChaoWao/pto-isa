@@ -309,15 +309,17 @@ public:
      * @param funcId      Function identifier for this kernel
      * @param sourcePath  Path to kernel source file (.cpp)
      * @param ptoIsaRoot  Path to PTO-ISA root directory (headers location)
+     * @param coreType    Core type: 0=AIC, 1=AIV (determines compilation flags)
      * @return 0 on success, -1 on error
      *
      * Example:
      *   runner.Init(0, 3, "./aicpu/lib.so", "./aicore/kernel.o");
-     *   runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", "/path/to/pto-isa");
+     *   runner.CompileAndLoadKernel(0, "./aicore/kernels/aiv/kernel_add.cpp", "/path/to/pto-isa", 1);
      */
     int CompileAndLoadKernel(int funcId,
                             const std::string& sourcePath,
-                            const std::string& ptoIsaRoot);
+                            const std::string& ptoIsaRoot,
+                            int coreType);
 
     /**
      * Load a single kernel binary to device GM memory
