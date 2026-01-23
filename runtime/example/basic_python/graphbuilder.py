@@ -58,22 +58,22 @@ def main():
         pto_isa_root = "../../_deps/pto-isa-src"
         print(f"PTO_ISA_ROOT not set, using default: {pto_isa_root}")
 
-    # Compile and load kernel_add (func_id=0)
-    rc = runner.compile_and_load_kernel(0, "kernels/kernel_add.cpp", pto_isa_root)
+    # Compile and load kernel_add (func_id=0, AIV type)
+    rc = runner.compile_and_load_kernel(0, "kernels/aiv/kernel_add.cpp", pto_isa_root, 1)
     if rc != 0:
         print("Error: Failed to compile kernel_add")
         runner.finalize()
         return rc
 
-    # Compile and load kernel_add_scalar (func_id=1)
-    rc = runner.compile_and_load_kernel(1, "kernels/kernel_add_scalar.cpp", pto_isa_root)
+    # Compile and load kernel_add_scalar (func_id=1, AIV type)
+    rc = runner.compile_and_load_kernel(1, "kernels/aiv/kernel_add_scalar.cpp", pto_isa_root, 1)
     if rc != 0:
         print("Error: Failed to compile kernel_add_scalar")
         runner.finalize()
         return rc
 
-    # Compile and load kernel_mul (func_id=2)
-    rc = runner.compile_and_load_kernel(2, "kernels/kernel_mul.cpp", pto_isa_root)
+    # Compile and load kernel_mul (func_id=2, AIV type)
+    rc = runner.compile_and_load_kernel(2, "kernels/aiv/kernel_mul.cpp", pto_isa_root, 1)
     if rc != 0:
         print("Error: Failed to compile kernel_mul")
         runner.finalize()
@@ -126,7 +126,7 @@ def main():
     # =========================================================================
     print("\n=== Creating Task Graph for Formula ===")
     print("Formula: (a + b + 1)(a + b + 2)")
-    print("Tasks:")
+    print("Tasks (all running on AIV cores):")
     print("  task0: c = a + b")
     print("  task1: d = c + 1")
     print("  task2: e = c + 2")
@@ -134,17 +134,17 @@ def main():
 
     test_graph = pto_runtime.Graph()
 
-    # Task 0: c = a + b (func_id=0: kernel_add)
-    t0 = test_graph.add_task([dev_a, dev_b, dev_c, SIZE], func_id=0)
+    # Task 0: c = a + b (func_id=0: kernel_add, core_type=1: AIV)
+    t0 = test_graph.add_task([dev_a, dev_b, dev_c, SIZE], func_id=0, core_type=1)
 
-    # Task 1: d = c + 1 (func_id=1: kernel_add_scalar)
-    t1 = test_graph.add_task([dev_c, 1.0, dev_d, SIZE], func_id=1)
+    # Task 1: d = c + 1 (func_id=1: kernel_add_scalar, core_type=1: AIV)
+    t1 = test_graph.add_task([dev_c, 1.0, dev_d, SIZE], func_id=1, core_type=1)
 
-    # Task 2: e = c + 2 (func_id=1: kernel_add_scalar)
-    t2 = test_graph.add_task([dev_c, 2.0, dev_e, SIZE], func_id=1)
+    # Task 2: e = c + 2 (func_id=1: kernel_add_scalar, core_type=1: AIV)
+    t2 = test_graph.add_task([dev_c, 2.0, dev_e, SIZE], func_id=1, core_type=1)
 
-    # Task 3: f = d * e (func_id=2: kernel_mul)
-    t3 = test_graph.add_task([dev_d, dev_e, dev_f, SIZE], func_id=2)
+    # Task 3: f = d * e (func_id=2: kernel_mul, core_type=1: AIV)
+    t3 = test_graph.add_task([dev_d, dev_e, dev_f, SIZE], func_id=2, core_type=1)
 
     # Add dependencies
     test_graph.add_successor(t0, t1)  # t0 → t1

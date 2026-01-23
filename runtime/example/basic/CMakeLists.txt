@@ -22,15 +22,15 @@ endif()
 
 set(PTO_ISA_ROOT ${pto-isa_SOURCE_DIR})
 
-# Source files for the example kernels
-set(KERNEL_ADD ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_add.cpp)
-set(KERNEL_ADD_SCALAR ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_add_scalar.cpp)
-set(KERNEL_MUL ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_mul.cpp)
+# Source files for the example kernels (AIV type)
+set(KERNEL_ADD ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_add.cpp)
+set(KERNEL_ADD_SCALAR ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_add_scalar.cpp)
+set(KERNEL_MUL ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_mul.cpp)
 
-# Object files (AIC only - cube architecture)
-set(KERNEL_OBJ_ADD ${CMAKE_CURRENT_BINARY_DIR}/kernel_add_aic.o)
-set(KERNEL_OBJ_ADD_SCALAR ${CMAKE_CURRENT_BINARY_DIR}/kernel_add_scalar_aic.o)
-set(KERNEL_OBJ_MUL ${CMAKE_CURRENT_BINARY_DIR}/kernel_mul_aic.o)
+# Object files (AIV - vector architecture)
+set(KERNEL_OBJ_ADD ${CMAKE_CURRENT_BINARY_DIR}/kernel_add_aiv.o)
+set(KERNEL_OBJ_ADD_SCALAR ${CMAKE_CURRENT_BINARY_DIR}/kernel_add_scalar_aiv.o)
+set(KERNEL_OBJ_MUL ${CMAKE_CURRENT_BINARY_DIR}/kernel_mul_aiv.o)
 
 # Compiler flags for AICore kernels
 set(AI_CORE_FLAGS
@@ -52,20 +52,20 @@ separate_arguments(AI_CORE_FLAGS)
 add_custom_target(example_kernels ALL
     DEPENDS ${KERNEL_ADD} ${KERNEL_ADD_SCALAR} ${KERNEL_MUL}
 
-    # Compile kernel_add (AIC only)
-    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIC__ --cce-aicore-arch=dav-c220-cube
+    # Compile kernel_add (AIV - vector architecture)
+    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIV__ --cce-aicore-arch=dav-c220-vec
             -o ${KERNEL_OBJ_ADD} ${KERNEL_ADD}
 
-    # Compile kernel_add_scalar (AIC only)
-    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIC__ --cce-aicore-arch=dav-c220-cube
+    # Compile kernel_add_scalar (AIV - vector architecture)
+    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIV__ --cce-aicore-arch=dav-c220-vec
             -o ${KERNEL_OBJ_ADD_SCALAR} ${KERNEL_ADD_SCALAR}
 
-    # Compile kernel_mul (AIC only)
-    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIC__ --cce-aicore-arch=dav-c220-cube
+    # Compile kernel_mul (AIV - vector architecture)
+    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIV__ --cce-aicore-arch=dav-c220-vec
             -o ${KERNEL_OBJ_MUL} ${KERNEL_MUL}
 
     BYPRODUCTS ${KERNEL_OBJ_ADD} ${KERNEL_OBJ_ADD_SCALAR} ${KERNEL_OBJ_MUL}
-    COMMENT "Compiling example kernels for basic example"
+    COMMENT "Compiling example kernels (AIV) for basic example"
 )
 
 # Build the graphbuilder executable

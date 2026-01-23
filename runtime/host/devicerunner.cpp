@@ -228,12 +228,18 @@ int DeviceRunner::Init(int deviceId, int numCores, const std::string &aicpuSoPat
 
     // Initialize handshake buffers
     hankArgs_.resize(numCores);
+
+    // Calculate number of AIC cores (1/3 of total)
+    int numAic = (numCores + 2) / 3;  // Round up for 1/3
+
     for (int i = 0; i < numCores; i++) {
         hankArgs_[i].aicpu_ready = 0;
         hankArgs_[i].aicore_done = 0;
         hankArgs_[i].control = 0;
         hankArgs_[i].task = 0;
         hankArgs_[i].task_status = 0;
+        // Set core type: first 1/3 are AIC (0), remaining 2/3 are AIV (1)
+        hankArgs_[i].core_type = (i < numAic) ? 0 : 1;
     }
 
     // Allocate and copy handshake to device
@@ -651,19 +657,21 @@ uint64_t DeviceRunner::GetFunctionBinAddr(int funcId) {
 
 int DeviceRunner::CompileAndLoadKernel(int funcId,
                                        const std::string& sourcePath,
-                                       const std::string& ptoIsaRoot) {
+                                       const std::string& ptoIsaRoot,
+                                       int coreType) {
     if (!initialized_) {
         std::cerr << "Error: DeviceRunner not initialized. Call Init() first.\n";
         return -1;
     }
 
-    std::cout << "\n=== Compiling and Loading Kernel (Runtime) ===" << '\n';
+    const char* coreTypeName = (coreType == 1) ? "AIV" : "AIC";
+    std::cout << "\n=== Compiling and Loading Kernel (Runtime, " << coreTypeName << ") ===" << '\n';
     std::cout << "func_id=" << funcId << ", source=" << sourcePath << '\n';
 
     // Step 1: Compile the kernel source
     std::string outputPath;
     std::string errorMsg;
-    int rc = KernelCompiler::CompileKernel(sourcePath, ptoIsaRoot, outputPath, errorMsg);
+    int rc = KernelCompiler::CompileKernel(sourcePath, ptoIsaRoot, coreType, outputPath, errorMsg);
     if (rc != 0) {
         std::cerr << "Error: Kernel compilation failed: " << errorMsg << '\n';
         return -1;

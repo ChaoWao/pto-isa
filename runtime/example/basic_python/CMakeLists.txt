@@ -18,23 +18,24 @@ configure_file(
 )
 
 # Copy kernel source files to the build directory
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/kernels)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/kernels/aic)
 
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_add.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_add.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_add.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_add.cpp
     COPYONLY
 )
 
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_add_scalar.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_add_scalar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_add_scalar.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_add_scalar.cpp
     COPYONLY
 )
 
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_mul.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_mul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/aiv/kernel_mul.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_mul.cpp
     COPYONLY
 )
 
@@ -43,9 +44,9 @@ add_custom_target(python_example ALL
     DEPENDS
         ${CMAKE_CURRENT_BINARY_DIR}/graphbuilder.py
         ${CMAKE_CURRENT_BINARY_DIR}/run.sh
-        ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_add.cpp
-        ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_add_scalar.cpp
-        ${CMAKE_CURRENT_BINARY_DIR}/kernels/kernel_mul.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_add.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_add_scalar.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/kernels/aiv/kernel_mul.cpp
     COMMENT "Setting up Python basic example"
 )
 

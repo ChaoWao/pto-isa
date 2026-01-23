@@ -44,6 +44,18 @@
 // =============================================================================
 
 /**
+ * Core type enumeration
+ *
+ * Specifies which AICore type a task should run on.
+ * AIC (AICore Compute) handles compute-intensive operations.
+ * AIV (AICore Vector) handles vector/SIMD operations.
+ */
+enum class CoreType : int {
+  AIC = 0,  // AICore Compute
+  AIV = 1   // AICore Vector
+};
+
+/**
  * Task entry in the dependency graph
  *
  * Each task has a unique ID (its index in the task array), arguments,
@@ -59,6 +71,10 @@ typedef struct {
   // This is the GM address where the kernel binary resides
   // It's cast to a function pointer at runtime: (KernelFunc)functionBinAddr
   uint64_t functionBinAddr;     // Address of kernel in device GM memory
+
+  // Core type specification (NEW)
+  // Specifies which core type this task should run on: 0=AIC, 1=AIV
+  int core_type;                // 0=AIC, 1=AIV
 
   // Dependency tracking (using PTO runtime terminology)
   int fanin;                    // Number of predecessors (dependencies)
@@ -108,9 +124,11 @@ public:
    *
    * @param args      Array of uint64_t arguments
    * @param num_args  Number of arguments (must be <= GRAPH_MAX_ARGS)
+   * @param func_id   Function identifier
+   * @param core_type Core type for this task (0=AIC, 1=AIV)
    * @return Task ID (>= 0) on success, -1 on failure
    */
-  int add_task(uint64_t *args, int num_args, int func_id);
+  int add_task(uint64_t *args, int num_args, int func_id, int core_type = 0);
 
   /**
    * Add a dependency edge: from_task -> to_task
