@@ -16,8 +16,8 @@ else()
 endif()
 
 # Compile kernels
-add_subdirectory(aicpu)
-add_subdirectory(aicore)
+add_subdirectory(src/aicpu)
+add_subdirectory(src/aicore)
 
 # Example programs
 add_subdirectory(example)

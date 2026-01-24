@@ -2,28 +2,7 @@ cmake_minimum_required(VERSION 3.16.3)
 
 set(BISHENG_COMPILER "${ASCEND_HOME_PATH}/bin/ccec")
 set(BISHENG_LD "${ASCEND_HOME_PATH}/bin/ld.lld")
-
-# Fetch pto-isa from gitcode.com using CMake FetchContent
-include(FetchContent)
-
-# Fetch pto-isa from gitcode.com
-FetchContent_Declare(
-    pto-isa
-    GIT_REPOSITORY https://gitcode.com/cann/pto-isa.git
-    GIT_TAG        master  # default branch is master
-    GIT_SHALLOW    TRUE    # only fetch latest commit for faster download
-)
-
-# Populate (download) pto-isa but don't execute its CMakeLists.txt
-# We only need the header files, not the full build
-FetchContent_GetProperties(pto-isa)
-if(NOT pto-isa_POPULATED)
-    FetchContent_Populate(pto-isa)
-endif()
-
-# Set PTO_ISA_ROOT to the fetched source directory
-set(PTO_ISA_ROOT ${pto-isa_SOURCE_DIR})
-message(STATUS "Fetched pto-isa to: ${PTO_ISA_ROOT}")
+set(GRAPH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../graph")
 
 # Source files - dispatcher only
 set(AICORE_DISPATCHER ${CMAKE_CURRENT_SOURCE_DIR}/kernel.cpp)
@@ -43,10 +22,7 @@ set(AI_CORE_FLAGS
     -mllvm -cce-aicore-record-overflow=false \
     -mllvm -cce-aicore-addr-transform \
     -mllvm -cce-aicore-dcci-insert-for-scalar=false \
-    -DMEMORY_BASE \
-    -I${PTO_ISA_ROOT}/include \
-    -I${PTO_ISA_ROOT}/include/pto \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/.."
+    -I${GRAPH_DIR}"
 )
 separate_arguments(AI_CORE_FLAGS)
 

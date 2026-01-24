@@ -8,8 +8,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
-#include "../graph/graph.h"
-#include "../host/devicerunner.h"
+#include "../../src/graph/graph.h"
+#include "../../src/host/devicerunner.h"
 
 namespace py = pybind11;
 

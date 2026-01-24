@@ -1,12 +1,10 @@
 /**
- * Minimal AICore Kernel with PTO Support
+ * Minimal AICore Kernel
  */
 
 #include <cstdint>
-#include <pto/pto-inst.hpp>
-#include <pto/common/constants.hpp>
-#include "../graph/handshake.h"
-#include "../graph/graph.h"
+#include "handshake.h"
+#include "graph.h"
 
 #ifndef __gm__
 #define __gm__
@@ -37,38 +35,6 @@
 #endif
 
 [[block_local]] int blockIdx;
-
-using namespace pto;
-
-// TADD implementation (float path)
-template <typename T, int kTRows_, int kTCols_, int vRows, int vCols>
-__aicore__ __attribute__((always_inline)) void runTAdd(__gm__ T __out__ *out, __gm__ T __in__ *src0, __gm__ T __in__ *src1)
-{
-    using DynShapeDim5 = Shape<1, 1, 1, vRows, vCols>;
-    using DynStridDim5 = Stride<1, 1, 1, kTCols_, 1>;
-    using GlobalData = GlobalTensor<T, DynShapeDim5, DynStridDim5>;
-    using TileData = Tile<TileType::Vec, T, kTRows_, kTCols_, BLayout::RowMajor, -1, -1>;
-
-    TileData src0Tile(vRows, vCols);
-    TileData src1Tile(vRows, vCols);
-    TileData dstTile(vRows, vCols);
-    TASSIGN(src0Tile, 0x0);
-    TASSIGN(src1Tile, 0x10000);
-    TASSIGN(dstTile, 0x20000);
-
-    GlobalData src0Global(src0);
-    GlobalData src1Global(src1);
-    GlobalData dstGlobal(out);
-
-    TLOAD(src0Tile, src0Global);
-    TLOAD(src1Tile, src1Global);
-    set_flag(PIPE_MTE2, PIPE_V, EVENT_ID0);
-    wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID0);
-    TADD(dstTile, src0Tile, src1Tile);
-    set_flag(PIPE_V, PIPE_MTE3, EVENT_ID0);
-    wait_flag(PIPE_V, PIPE_MTE3, EVENT_ID0);
-    TSTORE(dstGlobal, dstTile);
-}
 
 /**
  * Unified function pointer type for kernel dispatch

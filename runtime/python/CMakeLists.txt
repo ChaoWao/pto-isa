@@ -4,24 +4,15 @@ cmake_minimum_required(VERSION 3.15)
 
 # Find Python and pybind11
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-
-# Fetch pybind11 if not available
-include(FetchContent)
-FetchContent_Declare(
-    pybind11
-    GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG        v2.11.1
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(pybind11)
+find_package(pybind11 REQUIRED)
 
 # Create Python module
-pybind11_add_module(pto_runtime bindings.cpp
-    ../host/devicerunner.cpp
-    ../host/memoryallocator.cpp
-    ../host/binary_loader.cpp
-    ../host/kernel_compiler.cpp
-    ../graph/graph.cpp
+pybind11_add_module(pto_runtime src/bindings.cpp
+    ../src/host/devicerunner.cpp
+    ../src/host/memoryallocator.cpp
+    ../src/host/binary_loader.cpp
+    ../src/host/kernel_compiler.cpp
+    ../src/graph/graph.cpp
 )
 
 # Include directories

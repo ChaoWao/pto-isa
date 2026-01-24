@@ -71,16 +71,16 @@ add_custom_target(example_kernels ALL
 # Build the graphbuilder executable
 add_executable(graphbuilder
     graphbuilder.cpp
-    ${CMAKE_SOURCE_DIR}/host/devicerunner.cpp
-    ${CMAKE_SOURCE_DIR}/host/memoryallocator.cpp
-    ${CMAKE_SOURCE_DIR}/host/binary_loader.cpp
-    ${CMAKE_SOURCE_DIR}/host/kernel_compiler.cpp
-    ${CMAKE_SOURCE_DIR}/graph/graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/devicerunner.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/memoryallocator.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/binary_loader.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/kernel_compiler.cpp
+    ${CMAKE_SOURCE_DIR}/src/graph/graph.cpp
 )
 
 target_include_directories(graphbuilder PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/graph
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/graph
 )
 
 # Link CANN runtime
