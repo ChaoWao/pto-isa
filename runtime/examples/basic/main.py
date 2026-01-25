@@ -67,6 +67,7 @@ def check_and_build_runtime():
             str(example_root / "graph"),
         ]
         aicpu_source_dirs = [
+            str(example_root / "aicpu"),
             str(example_root / "graph"),
         ]
         aicpu_binary = compiler.compile("aicpu", aicpu_include_dirs, aicpu_source_dirs)

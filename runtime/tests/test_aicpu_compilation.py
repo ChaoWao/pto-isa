@@ -26,6 +26,7 @@ class TestRealEnvironment:
         runtime_dir = Path(__file__).parent.parent
         aicpu_dir = runtime_dir / "src" / "aicpu"
         graph_dir = runtime_dir / "tests" / "example_graph_impl"
+        aicpu_dir = runtime_dir / "tests" / "example_aicpu_impl"
 
         assert aicpu_dir.exists(), f"AICPU directory not found: {aicpu_dir}"
         assert graph_dir.exists(), f"Graph directory not found: {graph_dir}"
@@ -35,7 +36,7 @@ class TestRealEnvironment:
 
         # Use graph as both include and source directory
         include_dirs = [str(graph_dir)]
-        source_dirs = [str(graph_dir)]
+        source_dirs = [str(graph_dir), str(aicpu_dir)]
 
         # Compile
         binary_data = compiler.compile(

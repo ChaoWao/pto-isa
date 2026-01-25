@@ -1,4 +1,4 @@
-# Build AICPU kernel using aicpu/* + common/* + custom includes and sources (for `Task` and `Graph`)
+# Build AICPU kernel using aicpu/*.cpp files, common/* sources, and custom includes
 # CMAKE_C_COMPILER and CMAKE_CXX_COMPILER are set when calling cmake
 # CUSTOM_INCLUDE_DIRS and CUSTOM_SOURCE_DIRS are set when calling cmake
 # ASCEND_HOME_PATH is set when calling cmake
@@ -19,10 +19,8 @@ endif()
 
 # Build complete source list from CUSTOM_SOURCE_DIRS and core sources
 set(AICPU_KERNEL_SOURCES "")
-list(APPEND AICPU_KERNEL_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/kernel.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/device_log.cpp"
-)
+file(GLOB AICPU_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+list(APPEND AICPU_KERNEL_SOURCES ${AICPU_SOURCES})
 file(GLOB DIR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../common/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../common/*.c")
 list(APPEND AICPU_KERNEL_SOURCES ${DIR_SOURCES})
 if(DEFINED CUSTOM_SOURCE_DIRS)
