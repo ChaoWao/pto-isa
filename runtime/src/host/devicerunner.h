@@ -19,8 +19,8 @@
 #include <string>
 #include <vector>
 #include <runtime/rt.h>
-#include "../graph/kernel_args.h"
-#include "../graph/handshake.h"
+#include "kernel_args.h"
+#include "handshake.h"
 #include "memoryallocator.h"
 #include "function_cache.h"
 
@@ -110,13 +110,13 @@ struct AicpuSoInfo {
     MemoryAllocator* allocator_{nullptr};
 
     /**
-     * Load shared object file and copy to device memory
+     * Load shared object binary data and copy to device memory
      *
-     * @param soPath     Path to the .so file
-     * @param allocator  Memory allocator to use
+     * @param aicpuSoBinary  Binary data of the AICPU shared object
+     * @param allocator      Memory allocator to use
      * @return 0 on success, error code on failure
      */
-    int Init(const std::string &soPath, MemoryAllocator& allocator);
+    int Init(const std::vector<uint8_t>& aicpuSoBinary, MemoryAllocator& allocator);
 
     /**
      * Free device memory allocated for shared object
@@ -152,14 +152,14 @@ public:
      *
      * Must be called before any other operations.
      *
-     * @param deviceId       Device ID (0-15)
-     * @param numCores       Number of cores for handshake (e.g., 3 for 1c2v)
-     * @param aicpuSoPath    Path to AICPU shared object
-     * @param aicoreKernelPath Path to AICore kernel binary (default: "./aicore/kernel.o")
+     * @param deviceId            Device ID (0-15)
+     * @param numCores            Number of cores for handshake (e.g., 3 for 1c2v)
+     * @param aicpuSoBinary       Binary data of AICPU shared object
+     * @param aicoreKernelBinary  Binary data of AICore kernel
      * @return 0 on success, error code on failure
      */
-    int Init(int deviceId, int numCores, const std::string &aicpuSoPath,
-             const std::string &aicoreKernelPath = "./aicore/kernel.o");
+    int Init(int deviceId, int numCores, const std::vector<uint8_t>& aicpuSoBinary,
+             const std::vector<uint8_t>& aicoreKernelBinary);
 
     /**
      * Allocate device tensor memory
@@ -340,7 +340,7 @@ private:
     bool initialized_{false};
     int deviceId_{-1};
     int numCores_{0};
-    std::string aicoreKernelPath_;
+    std::vector<uint8_t> aicoreKernelBinary_;
 
     // Memory management
     MemoryAllocator memAlloc_;

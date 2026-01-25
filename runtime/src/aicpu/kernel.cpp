@@ -1,10 +1,10 @@
-#include "device_log.h"
-#include "../graph/graph.h"
-#include "../graph/handshake.h"
-#include "../graph/kernel_args.h"
 #include <cstdint>
 #include <cstdio>
 #include <sched.h>
+#include "device_log.h"
+#include "graph.h"
+#include "handshake.h"
+#include "kernel_args.h"
 
 /**
  * Handshake AICore - Initialize and synchronize with AICore kernels

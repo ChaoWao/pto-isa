@@ -1,44 +1,63 @@
 /**
- * Graph Builder Example
- * This program demonstrates how to build a task dependency graph and execute it
- * on Ascend devices using the DeviceRunner interface.
+ * Graph Builder - Basic Example
+ *
+ * Initializes a pre-allocated graph with the following task structure:
+ * Formula: (a + b + 1)(a + b + 2)
+ *
+ * Tasks:
+ *   task0: c = a + b (kernel_add)
+ *   task1: d = c + 1 (kernel_add_scalar)
+ *   task2: e = c + 2 (kernel_add_scalar)
+ *   task3: f = d * e (kernel_mul)
+ *
+ * Dependencies:
+ *   task0 -> task1
+ *   task0 -> task2
+ *   task1 -> task3
+ *   task2 -> task3
  */
 
+#include "graph/graph.h"
+#include <stdint.h>
+#include <stddef.h>
+#include <new>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
-#include "graph/graph.h"
-#include "host/devicerunner.h"
+#include "graph.h"
+#include "devicerunner.h"
 
-// Example usage
-int main(int argc, char **argv) {
-    std::cout << "=== Graph Builder Example ===" << '\n';
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-    // Parse device ID from command line
-    int deviceId = 9;
-    if (argc > 1) {
-        try {
-            deviceId = std::stoi(argv[1]);
-            if (deviceId < 0 || deviceId > 15) {
-                std::cerr << "Error: deviceId (" << deviceId << ") out of range [0, 15]" << '\n';
-                return -1;
-            }
-        } catch (const std::exception &e) {
-            std::cerr << "Error: invalid deviceId argument: " << argv[1] << '\n';
-            return -1;
-        }
-    }
+// Static storage for tensor pointers (used by ValidateGraphImpl)
+static void* g_dev_a = nullptr;
+static void* g_dev_b = nullptr;
+static void* g_dev_c = nullptr;
+static void* g_dev_d = nullptr;
+static void* g_dev_e = nullptr;
+static void* g_dev_f = nullptr;
+static size_t g_tensor_bytes = 0;
+
+/**
+ * Initialize a pre-allocated graph for the basic example.
+ *
+ * This function takes a pre-allocated Graph pointer and builds the complete
+ * example graph inside it. All graph building logic is handled in C++.
+ *
+ * @param graph      Pointer to pointer to Graph (will allocate and fill)
+ * @return 0 on success, -1 on failure
+ */
+int InitGraphImpl(Graph **graph) {
+    int rc = 0;
 
     // Initialize DeviceRunner
     DeviceRunner& runner = DeviceRunner::Get();
-    int rc = runner.Init(deviceId, 3, "./aicpu/libaicpu_graph_kernel.so", "./aicore/kernel.o");
-    if (rc != 0) {
-        std::cerr << "Error: DeviceRunner initialization failed" << '\n';
-        return rc;
-    }
+    // Note: DeviceRunner should already be initialized by Python before calling InitGraph
 
     // Compile and load kernels at runtime
     std::cout << "\n=== Compiling Kernels at Runtime ===" << '\n';
@@ -54,27 +73,24 @@ int main(int argc, char **argv) {
         std::cout << "PTO_ISA_ROOT not set, using default: " << ptoIsaRoot << '\n';
     }
 
-    // Compile and load kernel_add (func_id=0, AIV core)
+    // Compile and load kernel_add (func_id=0)
     rc = runner.CompileAndLoadKernel(0, "kernels/aiv/kernel_add.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add" << '\n';
-        runner.Finalize();
         return rc;
     }
 
-    // Compile and load kernel_add_scalar (func_id=1, AIV core)
+    // Compile and load kernel_add_scalar (func_id=1)
     rc = runner.CompileAndLoadKernel(1, "kernels/aiv/kernel_add_scalar.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add_scalar" << '\n';
-        runner.Finalize();
         return rc;
     }
 
-    // Compile and load kernel_mul (func_id=2, AIV core)
+    // Compile and load kernel_mul (func_id=2)
     rc = runner.CompileAndLoadKernel(2, "kernels/aiv/kernel_mul.cpp", ptoIsaRoot, 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_mul" << '\n';
-        runner.Finalize();
         return rc;
     }
 
@@ -96,7 +112,6 @@ int main(int argc, char **argv) {
 
     if (!dev_a || !dev_b || !dev_c || !dev_d || !dev_e || !dev_f) {
         std::cerr << "Error: Failed to allocate device tensors" << '\n';
-        runner.Finalize();
         return -1;
     }
     std::cout << "Allocated 6 tensors (128x128 each, " << BYTES << " bytes per tensor)\n";
@@ -110,7 +125,6 @@ int main(int argc, char **argv) {
         std::cerr << "Error: Failed to copy input a to device" << '\n';
         runner.FreeTensor(dev_a); runner.FreeTensor(dev_b); runner.FreeTensor(dev_c);
         runner.FreeTensor(dev_d); runner.FreeTensor(dev_e); runner.FreeTensor(dev_f);
-        runner.Finalize();
         return rc;
     }
 
@@ -119,12 +133,24 @@ int main(int argc, char **argv) {
         std::cerr << "Error: Failed to copy input b to device" << '\n';
         runner.FreeTensor(dev_a); runner.FreeTensor(dev_b); runner.FreeTensor(dev_c);
         runner.FreeTensor(dev_d); runner.FreeTensor(dev_e); runner.FreeTensor(dev_f);
-        runner.Finalize();
         return rc;
     }
 
     std::cout << "Initialized input tensors: a=2.0, b=3.0 (all elements)\n";
     std::cout << "Expected result: f = (2+3+1)*(2+3+2) = 6*7 = 42.0\n";
+
+    // Allocate Graph on heap
+    *graph = new Graph();
+    Graph* g = *graph;
+
+    // Store tensor pointers for later use by ValidateGraphImpl
+    g_dev_a = dev_a;
+    g_dev_b = dev_b;
+    g_dev_c = dev_c;
+    g_dev_d = dev_d;
+    g_dev_e = dev_e;
+    g_dev_f = dev_f;
+    g_tensor_bytes = BYTES;
 
     // =========================================================================
     // BUILD GRAPH - This is the core graph building logic
@@ -137,81 +163,92 @@ int main(int argc, char **argv) {
     std::cout << "  task2: e = c + 2\n";
     std::cout << "  task3: f = d * e\n\n";
 
-    Graph testGraph;
-
     // Helper union to encode float scalar as uint64_t
     union {
         float f32;
         uint64_t u64;
     } scalar_converter;
 
-    // Task 0: c = a + b (func_id=0: kernel_add, AIV core)
+    // Task 0: c = a + b (func_id=0: kernel_add)
     uint64_t args_t0[4];
     args_t0[0] = reinterpret_cast<uint64_t>(dev_a);  // src0
     args_t0[1] = reinterpret_cast<uint64_t>(dev_b);  // src1
     args_t0[2] = reinterpret_cast<uint64_t>(dev_c);  // out
     args_t0[3] = SIZE;                                // size
-    int t0 = testGraph.add_task(args_t0, 4, 0, 1);   // core_type=1 (AIV)
+    int t0 = g->add_task(args_t0, 4, 0);
 
-    // Task 1: d = c + 1 (func_id=1: kernel_add_scalar, AIV core)
+    // Task 1: d = c + 1 (func_id=1: kernel_add_scalar)
     uint64_t args_t1[4];
     args_t1[0] = reinterpret_cast<uint64_t>(dev_c);  // src
     scalar_converter.f32 = 1.0f;
     args_t1[1] = scalar_converter.u64;                // scalar=1.0
     args_t1[2] = reinterpret_cast<uint64_t>(dev_d);  // out
     args_t1[3] = SIZE;                                // size
-    int t1 = testGraph.add_task(args_t1, 4, 1, 1);   // core_type=1 (AIV)
+    int t1 = g->add_task(args_t1, 4, 1);
 
-    // Task 2: e = c + 2 (func_id=1: kernel_add_scalar, AIV core)
+    // Task 2: e = c + 2 (func_id=1: kernel_add_scalar)
     uint64_t args_t2[4];
     args_t2[0] = reinterpret_cast<uint64_t>(dev_c);  // src
     scalar_converter.f32 = 2.0f;
     args_t2[1] = scalar_converter.u64;                // scalar=2.0
     args_t2[2] = reinterpret_cast<uint64_t>(dev_e);  // out
     args_t2[3] = SIZE;                                // size
-    int t2 = testGraph.add_task(args_t2, 4, 1, 1);   // core_type=1 (AIV)
+    int t2 = g->add_task(args_t2, 4, 1);
 
-    // Task 3: f = d * e (func_id=2: kernel_mul, AIV core)
+    // Task 3: f = d * e (func_id=2: kernel_mul)
     uint64_t args_t3[4];
     args_t3[0] = reinterpret_cast<uint64_t>(dev_d);  // src0
     args_t3[1] = reinterpret_cast<uint64_t>(dev_e);  // src1
     args_t3[2] = reinterpret_cast<uint64_t>(dev_f);  // out
     args_t3[3] = SIZE;                                // size
-    int t3 = testGraph.add_task(args_t3, 4, 2, 1);   // core_type=1 (AIV)
+    int t3 = g->add_task(args_t3, 4, 2);
 
     // Add dependencies
-    testGraph.add_successor(t0, t1);  // t0 → t1
-    testGraph.add_successor(t0, t2);  // t0 → t2
-    testGraph.add_successor(t1, t3);  // t1 → t3
-    testGraph.add_successor(t2, t3);  // t2 → t3
+    g->add_successor(t0, t1);  // t0 → t1
+    g->add_successor(t0, t2);  // t0 → t2
+    g->add_successor(t1, t3);  // t1 → t3
+    g->add_successor(t2, t3);  // t2 → t3
 
-    std::cout << "Created graph with " << testGraph.get_task_count() << " tasks\n";
-    testGraph.print_graph();
+    std::cout << "Created graph with " << g->get_task_count() << " tasks\n";
+    g->print_graph();
 
-    // =========================================================================
-    // RUN GRAPH - Execute the graph on device
-    // =========================================================================
-    std::cout << "\n=== Executing Graph ===" << '\n';
-    rc = runner.Run(testGraph, 1);
-    if (rc != 0) {
-        std::cerr << "Error: Graph execution failed: " << rc << '\n';
-        runner.FreeTensor(dev_a); runner.FreeTensor(dev_b); runner.FreeTensor(dev_c);
-        runner.FreeTensor(dev_d); runner.FreeTensor(dev_e); runner.FreeTensor(dev_f);
-        runner.Finalize();
-        return rc;
+    std::cout << "\nGraph initialized. Ready for execution from Python.\n";
+
+    return 0;
+}
+
+int ValidateGraphImpl(Graph *graph) {
+    if (graph == nullptr) {
+        std::cerr << "Error: Graph pointer is null\n";
+        return -1;
     }
+
+    // Get DeviceRunner instance
+    DeviceRunner& runner = DeviceRunner::Get();
+
+    // Use globally stored tensor pointers
+    void* dev_a = g_dev_a;
+    void* dev_b = g_dev_b;
+    void* dev_c = g_dev_c;
+    void* dev_d = g_dev_d;
+    void* dev_e = g_dev_e;
+    void* dev_f = g_dev_f;
+    size_t BYTES = g_tensor_bytes;
+
+    constexpr int ROWS = 128;
+    constexpr int COLS = 128;
+    constexpr int SIZE = ROWS * COLS;  // Must match InitGraphImpl
 
     // =========================================================================
     // VALIDATE RESULTS - Retrieve and verify output
     // =========================================================================
     std::cout << "\n=== Validating Results ===" << '\n';
     std::vector<float> host_result(SIZE);
-    rc = runner.CopyFromDevice(host_result.data(), dev_f, BYTES);
+    int rc = runner.CopyFromDevice(host_result.data(), dev_f, BYTES);
     if (rc != 0) {
         std::cerr << "Error: Failed to copy result from device: " << rc << '\n';
         runner.FreeTensor(dev_a); runner.FreeTensor(dev_b); runner.FreeTensor(dev_c);
         runner.FreeTensor(dev_d); runner.FreeTensor(dev_e); runner.FreeTensor(dev_f);
-        runner.Finalize();
         return rc;
     }
 
@@ -256,7 +293,12 @@ int main(int argc, char **argv) {
     runner.FreeTensor(dev_f);
     std::cout << "Freed all device tensors\n";
 
-    runner.Finalize();
+    // Delete the graph
+    delete graph;
+
+    // Clear global tensor pointers
+    g_dev_a = g_dev_b = g_dev_c = g_dev_d = g_dev_e = g_dev_f = nullptr;
+    g_tensor_bytes = 0;
 
     if (rc != 0 || !all_correct) {
         std::cerr << "=== Execution Failed ===" << '\n';
@@ -267,3 +309,8 @@ int main(int argc, char **argv) {
 
     return 0;
 }
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+

@@ -26,7 +26,7 @@ runtime/
 │   │   ├── kernel_compiler.h/cpp   # Runtime kernel compilation
 │   │   └── binary_loader.h/cpp     # Binary loading utilities
 │   ├── aicpu/              # AICPU kernel implementation
-│   │   ├── graph_executor.cpp  # Task scheduler for AICPU
+│   │   ├── kernel.cpp         # Task scheduler for AICPU
 │   │   └── device_log.h/cpp    # Device logging utilities
 │   └── aicore/             # AICore kernel implementation
 │       └── kernel.cpp          # Task execution kernels (add, mul, etc.)
@@ -59,7 +59,7 @@ runtime/
 - Automatic tracking of allocations
 - Prevents memory leaks with automatic cleanup
 
-### AICPU Graph Executor ([src/aicpu/graph_executor.cpp](src/aicpu/graph_executor.cpp))
+### AICPU Graph Executor ([src/aicpu/kernel.cpp](src/aicpu/kernel.cpp))
 - Task scheduler running on AICPU
 - Manages handshake protocol with AICore
 - Dispatches ready tasks to AICore cores

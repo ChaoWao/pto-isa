@@ -8,7 +8,7 @@
 #include "devicerunner.h"
 #include "binary_loader.h"
 #include "kernel_compiler.h"
-#include "../graph/graph.h"
+#include "graph.h"
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -110,27 +110,22 @@ int KernelArgsHelper::FinalizeGraphArgs() {
 // AicpuSoInfo Implementation
 // =============================================================================
 
-int AicpuSoInfo::Init(const std::string &soPath, MemoryAllocator& allocator) {
+int AicpuSoInfo::Init(const std::vector<uint8_t>& aicpuSoBinary, MemoryAllocator& allocator) {
     allocator_ = &allocator;
 
-    std::ifstream file(soPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        std::cerr << "Error: Cannot open " << soPath << '\n';
+    if (aicpuSoBinary.empty()) {
+        std::cerr << "Error: AICPU binary is empty\n";
         return -1;
     }
 
-    size_t fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::vector<char> buffer(fileSize);
-    file.read(buffer.data(), fileSize);
-
+    size_t fileSize = aicpuSoBinary.size();
     void *dAicpuData = allocator_->Alloc(fileSize);
     if (dAicpuData == nullptr) {
         std::cerr << "Error: Alloc failed for AICPU SO\n";
         return -1;
     }
 
-    int rc = rtMemcpy(dAicpuData, fileSize, buffer.data(), fileSize, RT_MEMCPY_HOST_TO_DEVICE);
+    int rc = rtMemcpy(dAicpuData, fileSize, aicpuSoBinary.data(), fileSize, RT_MEMCPY_HOST_TO_DEVICE);
     if (rc != 0) {
         std::cerr << "Error: rtMemcpy failed: " << rc << '\n';
         allocator_->Free(dAicpuData);
@@ -161,8 +156,8 @@ DeviceRunner &DeviceRunner::Get() {
     return runner;
 }
 
-int DeviceRunner::Init(int deviceId, int numCores, const std::string &aicpuSoPath,
-                       const std::string &aicoreKernelPath) {
+int DeviceRunner::Init(int deviceId, int numCores, const std::vector<uint8_t>& aicpuSoBinary,
+                       const std::vector<uint8_t>& aicoreKernelBinary) {
     if (initialized_) {
         std::cerr << "Error: DeviceRunner already initialized\n";
         return -1;
@@ -170,7 +165,7 @@ int DeviceRunner::Init(int deviceId, int numCores, const std::string &aicpuSoPat
 
     deviceId_ = deviceId;
     numCores_ = numCores;
-    aicoreKernelPath_ = aicoreKernelPath;
+    aicoreKernelBinary_ = aicoreKernelBinary;
 
     // Set device
     int rc = rtSetDevice(deviceId);
@@ -202,7 +197,7 @@ int DeviceRunner::Init(int deviceId, int numCores, const std::string &aicpuSoPat
     }
 
     // Load AICPU SO
-    rc = soInfo_.Init(aicpuSoPath, memAlloc_);
+    rc = soInfo_.Init(aicpuSoBinary, memAlloc_);
     if (rc != 0) {
         std::cerr << "Error: AicpuSoInfo::Init failed: " << rc << '\n';
         rtStreamDestroy(streamAicpu_);
@@ -442,7 +437,7 @@ int DeviceRunner::Finalize() {
     initialized_ = false;
     deviceId_ = -1;
     numCores_ = 0;
-    aicoreKernelPath_.clear();
+    aicoreKernelBinary_.clear();
     hankArgs_.clear();
 
     std::cout << "DeviceRunner finalized\n";
@@ -473,14 +468,13 @@ int DeviceRunner::LaunchAiCpuKernel(rtStream_t stream, KernelArgs *kArgs, const 
 }
 
 int DeviceRunner::LauncherAicoreKernel(rtStream_t stream, KernelArgs *kernelArgs) {
-    const std::string binPath = aicoreKernelPath_;
-    std::vector<uint8_t> bin;
-    if (ReadFile(binPath, bin) != 0) {
+    if (aicoreKernelBinary_.empty()) {
+        std::cerr << "Error: AICore kernel binary is empty\n";
         return -1;
     }
 
-    size_t binSize = bin.size();
-    const void *binData = bin.data();
+    size_t binSize = aicoreKernelBinary_.size();
+    const void *binData = aicoreKernelBinary_.data();
 
     rtDevBinary_t binary;
     std::memset(&binary, 0, sizeof(binary));

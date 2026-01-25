@@ -23,6 +23,9 @@
 #include <stdio.h>  // for fprintf, printf
 #include <string.h> // for memset
 
+// Forward declaration
+class DeviceRunner;
+
 // =============================================================================
 // Configuration Macros
 // =============================================================================

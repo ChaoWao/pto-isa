@@ -107,9 +107,29 @@ Formula verified: (a + b + 1)(a + b + 2) = (2+3+1)*(2+3+2) = 42
 3. **Allocate Memory**: Device memory is allocated for 6 tensors (a, b, c, d, e, f)
 4. **Copy Input**: Input data is copied from host to device
 5. **Build Graph**: A task dependency graph is constructed with proper dependencies
-6. **Execute**: The graph is executed on the device
+6. **Execute Graph** (Python): Python calls `runner.run(graph)` to execute the graph on device
 7. **Validate**: Results are copied back and verified
 8. **Cleanup**: All resources are freed
+
+### Execution Flow
+
+The example demonstrates a clean separation of concerns:
+
+**C++ (InitGraph)**:
+- Compiles and loads kernels
+- Allocates device memory for tensors
+- Initializes input data
+- Builds the task dependency graph
+
+**Python**:
+- Orchestrates the overall flow
+- Calls `runner.run(graph)` to execute the graph on device
+
+**C++ (ValidateGraph)**:
+- Copies results from device
+- Validates computation correctness
+- Frees device memory
+- Deletes the graph
 
 ## Kernels
 

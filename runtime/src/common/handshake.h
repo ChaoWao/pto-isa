@@ -47,7 +47,6 @@ struct Handshake {
     volatile int32_t task_status;    // Task execution status: 0=idle, 1=busy
     volatile int32_t control;        // Control signal: 0=execute, 1=quit
     volatile int32_t core_type;      // Core type: 0=AIC, 1=AIV
-    volatile int32_t padding;        // Padding to maintain 64-byte alignment
 } __attribute__((aligned(64)));
 
 #ifdef __cplusplus

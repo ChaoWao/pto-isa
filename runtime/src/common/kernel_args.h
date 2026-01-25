@@ -39,8 +39,8 @@ extern "C" {
 struct KernelArgs {
     uint64_t unused[5] = {0};        // Alignment padding (required by CANN runtime offset)
     int64_t *deviceArgs{nullptr};    // Device arguments (AICPU reads, contains SO info)
-    int64_t *hankArgs{nullptr};      // Handshake buffer array (shared AICPU/AICore)
     int64_t core_num;                // Number of AICore instances
+    int64_t *hankArgs{nullptr};      // Handshake buffer array (shared AICPU/AICore)
     Graph *graphArgs{nullptr};       // Task graph in device memory (AICPU reads)
 };
 
