@@ -31,13 +31,16 @@ runtime/
 │   └── aicore/             # AICore kernel implementation
 │       └── kernel.cpp          # Task execution kernels (add, mul, etc.)
 ├── python/             # Python bindings
-│   ├── src/bindings.cpp    # pybind11 bindings
-│   ├── graphbuilder.py     # Python example
-│   ├── CMakeLists.txt      # Python module build config
-│   └── README.md           # Python API documentation
-├── example/            # Example applications
-│   └── basic_python/       # Basic Python example
-├── graphbuilder.cpp    # C++ example application
+│   ├── runtime_bindings.py # Python bindings wrapper
+│   ├── toolchain.py        # Build toolchain utilities
+│   ├── binary_compiler.py  # Binary compilation utilities
+│   └── build/              # Python module build directory
+├── examples/           # Example applications
+│   └── basic/              # Basic example (C++ and Python)
+│       ├── graphbuilder.cpp    # C++ implementation
+│       ├── main.py             # Python entry point
+│       ├── kernels/            # Runtime kernels
+│       └── graph/              # Graph utilities
 └── CMakeLists.txt      # Main build configuration
 ```
 
@@ -136,48 +139,40 @@ Formula verified: (a + b + 1)(a + b + 2) = (2+3+1)*(2+3+2) = 42
 
 ### Python Example
 
-See [python/README.md](python/README.md) for detailed Python API documentation.
-
 ```bash
-cd runtime/build/python
-export PYTHONPATH=$(pwd):$PYTHONPATH
-python3 ../../python/graphbuilder.py 9
+cd runtime/examples/basic
+python3 main.py 9
 ```
 
 Quick Python example:
 ```python
+# See examples/basic/main.py for complete working example
 import numpy as np
-import pto_runtime
+from runtime_bindings import load_runtime
+
+# Load runtime library
+DeviceRunner, Graph = load_runtime("path/to/libpto_runtime.so")
 
 # Initialize device
-runner = pto_runtime.DeviceRunner.get()
-runner.init(9, 3, "./aicpu/libaicpu_graph_kernel.so", "./aicore/kernel.o")
+runner = DeviceRunner()
+runner.init(device_id, num_cores, aicpu_binary, aicore_binary, pto_isa_root)
 
-# Allocate tensors
-dev_a = runner.allocate_tensor(128 * 128 * 4)
-dev_b = runner.allocate_tensor(128 * 128 * 4)
-dev_c = runner.allocate_tensor(128 * 128 * 4)
-
-# Copy data
-a = np.full((128, 128), 2.0, dtype=np.float32)
-b = np.full((128, 128), 3.0, dtype=np.float32)
-runner.copy_to_device(dev_a, a)
-runner.copy_to_device(dev_b, b)
-
-# Build and run graph
-graph = pto_runtime.Graph()
-t0 = graph.add_task([dev_a, dev_b, dev_c, 128*128], func_id=0)
+# Create and run graph
+graph = Graph()
+# Add tasks, allocate memory, copy data...
 runner.run(graph)
 
-# Get results
-result = np.zeros((128, 128), dtype=np.float32)
-runner.copy_from_device(result, dev_c)
-
 # Cleanup
-runner.free_tensor(dev_a)
-runner.free_tensor(dev_b)
-runner.free_tensor(dev_c)
 runner.finalize()
+```
+
+## Testing
+
+For detailed testing procedures and validation of the refactoring changes, see [TESTING.md](../TESTING.md).
+
+Quick test:
+```bash
+cd runtime/examples/basic && python main.py 9
 ```
 
 ## Runtime Kernel Compilation
@@ -191,14 +186,12 @@ The runtime supports compiling AICore kernel source files at runtime using the `
 
 // Initialize DeviceRunner
 DeviceRunner& runner = DeviceRunner::Get();
-runner.Init(deviceId, numCores, "./aicpu/lib.so", "./aicore/kernel.o");
-
-// Set PTO-ISA root (or use PTO_ISA_ROOT environment variable)
 std::string ptoIsaRoot = "/path/to/pto-isa";
+runner.Init(deviceId, numCores, "./aicpu/lib.so", "./aicore/kernel.o", ptoIsaRoot);
 
 // Compile and load kernels at runtime
-runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", ptoIsaRoot);
-runner.CompileAndLoadKernel(1, "./aicore/kernels/kernel_mul.cpp", ptoIsaRoot);
+runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", 1);
+runner.CompileAndLoadKernel(1, "./aicore/kernels/kernel_mul.cpp", 1);
 
 // Use the kernels in your graph
 Graph graph;
@@ -206,24 +199,24 @@ graph.add_task(args, 4, 0);  // Uses func_id=0 (kernel_add)
 runner.Run(graph);
 ```
 
-### Environment Setup
-
-Set the `PTO_ISA_ROOT` environment variable:
-```bash
-export PTO_ISA_ROOT=/path/to/pto-isa-liao/runtime/build/_deps/pto-isa-src
-```
 
 ### Python API
 
 ```python
-import pto_runtime
+from runtime_bindings import load_runtime
 
-runner = pto_runtime.DeviceRunner.get()
-runner.init(device_id=9, num_cores=3, aicpu_so_path="./aicpu/lib.so")
+# Load the runtime library
+DeviceRunner, Graph = load_runtime("/path/to/libpto_runtime.so")
 
-# Compile and load kernel at runtime
+# Initialize DeviceRunner with PTO-ISA root
+runner = DeviceRunner()
 pto_isa_root = "/path/to/pto-isa"
-runner.compile_and_load_kernel(func_id=0, kernel_path="kernel.cpp", pto_isa_root=pto_isa_root)
+runner.init(device_id=9, num_cores=3,
+           aicpu_binary=aicpu_bytes,
+           aicore_binary=aicore_bytes,
+           pto_isa_root=pto_isa_root)
+
+# See examples/basic/main.py for complete working example with kernel compilation
 ```
 
 ### Compiler Requirements
@@ -304,10 +297,10 @@ The runtime has been reorganized for better structure and Python integration:
    - Better separation of source code from examples and bindings
 
 4. **Added Python bindings**
-   - New `python/` directory with pybind11 bindings
+   - New `python/` directory with runtime bindings utilities
    - Python API matches C++ interface
    - NumPy integration for efficient data transfer
-   - Example Python application (`graphbuilder.py`)
+   - Example Python application in `examples/basic/main.py`
 
 5. **Added runtime kernel compilation**
    - New `src/host/kernel_compiler.cpp/h` for dynamic kernel loading
@@ -332,6 +325,6 @@ Kernel uses `DEV_INFO`, `DEV_DEBUG`, `DEV_WARN`, `DEV_ERROR` macros.
 
 ## References
 
-- See [src/graph/README.md](src/graph/README.md) for Graph class details
-- See [python/README.md](python/README.md) for Python API documentation
-- See example: [graphbuilder.cpp](graphbuilder.cpp) or [python/graphbuilder.py](python/graphbuilder.py)
+- See [src/graph/](src/graph/) for Graph class implementation
+- See [examples/basic/](examples/basic/) for complete working examples
+- See [examples/basic/main.py](examples/basic/main.py) for Python example usage

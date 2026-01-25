@@ -23,8 +23,6 @@ cmake .. -DBUILD_PYTHON_BINDINGS=ON
 make -j
 ```
 
-The Python example will be set up in `build/example/basic_python/`.
-
 ## Dependencies
 
 - Python 3
@@ -39,9 +37,6 @@ The Python example will be set up in `build/example/basic_python/`.
 From the build directory:
 
 ```bash
-# Add Python module to PYTHONPATH
-export PYTHONPATH=$(pwd)/python:$PYTHONPATH
-
 # Set PTO_ISA_ROOT for runtime kernel compilation
 export PTO_ISA_ROOT=$(pwd)/_deps/pto-isa-src
 ```
@@ -49,14 +44,14 @@ export PTO_ISA_ROOT=$(pwd)/_deps/pto-isa-src
 ### Run the Example
 
 ```bash
-cd example/basic_python
-python3 graphbuilder.py <device_id>
+cd ../examples/basic
+python3 main.py <device_id>
 ```
 
 For example, to run on device 9:
 
 ```bash
-python3 graphbuilder.py 9
+python3 main.py 9
 ```
 
 ## Expected Output
@@ -143,7 +138,7 @@ These kernels are compiled at runtime using the Bisheng compiler from the CANN t
 
 ## API Reference
 
-See the main [Python bindings README](../../python/README.md) for detailed API documentation.
+See the main [runtime README](../../README.md) for detailed documentation on the PTO Runtime API.
 
 ## Troubleshooting
 
