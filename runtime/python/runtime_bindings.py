@@ -9,7 +9,7 @@ Usage:
 
     DeviceRunner, Graph = load_runtime("/path/to/libpto_runtime.so")
     runner = DeviceRunner()
-    runner.init(device_id=0, num_cores=3, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes)
+    runner.init(device_id=0, num_cores=3, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
 
     graph = Graph()
     graph.initialize()
@@ -26,12 +26,14 @@ from ctypes import (
     c_void_p,
     c_uint8,
     c_size_t,
+    c_char_p,
     cast,
     sizeof,
 )
 from pathlib import Path
 from typing import Union
 import ctypes
+import tempfile
 
 
 # ============================================================================
@@ -72,7 +74,8 @@ class RuntimeLibraryLoader:
         # DeviceRunner functions
         self.lib.DeviceRunner_Init.argtypes = [c_int, c_int,
                                                POINTER(c_uint8), c_size_t,
-                                               POINTER(c_uint8), c_size_t]
+                                               POINTER(c_uint8), c_size_t,
+                                               c_char_p]
         self.lib.DeviceRunner_Init.restype = c_int
 
         self.lib.DeviceRunner_Run.argtypes = [c_void_p, c_int]
@@ -173,6 +176,7 @@ class DeviceRunner:
         num_cores: int,
         aicpu_binary: bytes,
         aicore_binary: bytes,
+        pto_isa_root: str,
     ) -> None:
         """
         Initialize the device runner.
@@ -182,6 +186,7 @@ class DeviceRunner:
             num_cores: Number of cores for handshake
             aicpu_binary: Binary data of AICPU shared object
             aicore_binary: Binary data of AICore kernel
+            pto_isa_root: Path to PTO-ISA root directory (headers location)
 
         Raises:
             RuntimeError: If initialization fails
@@ -197,6 +202,7 @@ class DeviceRunner:
             len(aicpu_binary),
             aicore_array,
             len(aicore_binary),
+            pto_isa_root.encode('utf-8'),
         )
         if rc != 0:
             raise RuntimeError(f"DeviceRunner_Init failed: {rc}")
@@ -255,20 +261,26 @@ class DeviceRunner:
 # Public API
 # ============================================================================
 
-def load_runtime(lib_path: Union[str, Path]) -> tuple:
+def load_runtime(lib_path: Union[str, Path, bytes]) -> tuple:
     """
     Load the PTO runtime library and return wrapper classes.
 
     Args:
-        lib_path: Path to libpto_runtime.so
+        lib_path: Path to libpto_runtime.so (str/Path), or compiled binary data (bytes)
 
     Returns:
         Tuple of (DeviceRunnerClass, GraphClass) initialized with the library
 
     Example:
+        # From file path
         DeviceRunner, Graph = load_runtime("/path/to/libpto_runtime.so")
+
+        # From compiled binary bytes
+        host_binary = compiler.compile("host", include_dirs, source_dirs)
+        DeviceRunner, Graph = load_runtime(host_binary)
+
         runner = DeviceRunner()
-        runner.init(device_id=0, num_cores=3, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes)
+        runner.init(device_id=0, num_cores=3, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
 
         graph = Graph()
         graph.initialize()
@@ -277,6 +289,12 @@ def load_runtime(lib_path: Union[str, Path]) -> tuple:
         graph.validate_and_cleanup()
         runner.finalize()
     """
+    # If bytes are provided, write to temporary file
+    if isinstance(lib_path, bytes):
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.so') as f:
+            f.write(lib_path)
+            lib_path = f.name
+
     loader = RuntimeLibraryLoader(lib_path)
     lib = loader.lib
 

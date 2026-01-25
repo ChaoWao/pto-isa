@@ -62,33 +62,25 @@ int InitGraphImpl(Graph **graph) {
     // Compile and load kernels at runtime
     std::cout << "\n=== Compiling Kernels at Runtime ===" << '\n';
 
-    // Get PTO-ISA root from environment or use default
-    const char* ptoIsaRootEnv = std::getenv("PTO_ISA_ROOT");
-    std::string ptoIsaRoot;
-    if (ptoIsaRootEnv != nullptr) {
-        ptoIsaRoot = ptoIsaRootEnv;
-    } else {
-        // Fallback to build directory location
-        ptoIsaRoot = "./build/_deps/pto-isa-src";
-        std::cout << "PTO_ISA_ROOT not set, using default: " << ptoIsaRoot << '\n';
-    }
+    // Note: PTO-ISA root is already configured in DeviceRunner during Init()
+    // which was called by Python before this function
 
     // Compile and load kernel_add (func_id=0)
-    rc = runner.CompileAndLoadKernel(0, "kernels/aiv/kernel_add.cpp", ptoIsaRoot, 1);
+    rc = runner.CompileAndLoadKernel(0, "kernels/aiv/kernel_add.cpp", 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add" << '\n';
         return rc;
     }
 
     // Compile and load kernel_add_scalar (func_id=1)
-    rc = runner.CompileAndLoadKernel(1, "kernels/aiv/kernel_add_scalar.cpp", ptoIsaRoot, 1);
+    rc = runner.CompileAndLoadKernel(1, "kernels/aiv/kernel_add_scalar.cpp", 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_add_scalar" << '\n';
         return rc;
     }
 
     // Compile and load kernel_mul (func_id=2)
-    rc = runner.CompileAndLoadKernel(2, "kernels/aiv/kernel_mul.cpp", ptoIsaRoot, 1);
+    rc = runner.CompileAndLoadKernel(2, "kernels/aiv/kernel_mul.cpp", 1);
     if (rc != 0) {
         std::cerr << "Error: Failed to compile kernel_mul" << '\n';
         return rc;

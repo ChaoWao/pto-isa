@@ -156,10 +156,11 @@ public:
      * @param numCores            Number of cores for handshake (e.g., 3 for 1c2v)
      * @param aicpuSoBinary       Binary data of AICPU shared object
      * @param aicoreKernelBinary  Binary data of AICore kernel
+     * @param ptoIsaRoot          Path to PTO-ISA root directory (headers location)
      * @return 0 on success, error code on failure
      */
     int Init(int deviceId, int numCores, const std::vector<uint8_t>& aicpuSoBinary,
-             const std::vector<uint8_t>& aicoreKernelBinary);
+             const std::vector<uint8_t>& aicoreKernelBinary, const std::string& ptoIsaRoot);
 
     /**
      * Allocate device tensor memory
@@ -303,22 +304,20 @@ public:
      *
      * Requirements:
      * - ASCEND_HOME_PATH must be set (for ccec compiler)
-     * - PTO-ISA headers must be available at ptoIsaRoot
+     * - PTO-ISA headers must be configured during Init()
      * - DeviceRunner must be initialized before calling this
      *
      * @param funcId      Function identifier for this kernel
      * @param sourcePath  Path to kernel source file (.cpp)
-     * @param ptoIsaRoot  Path to PTO-ISA root directory (headers location)
      * @param coreType    Core type: 0=AIC, 1=AIV (determines compilation flags)
      * @return 0 on success, -1 on error
      *
      * Example:
-     *   runner.Init(0, 3, "./aicpu/lib.so", "./aicore/kernel.o");
-     *   runner.CompileAndLoadKernel(0, "./aicore/kernels/aiv/kernel_add.cpp", "/path/to/pto-isa", 1);
+     *   runner.Init(0, 3, "./aicpu/lib.so", "./aicore/kernel.o", "/path/to/pto-isa");
+     *   runner.CompileAndLoadKernel(0, "./aicore/kernels/aiv/kernel_add.cpp", 1);
      */
     int CompileAndLoadKernel(int funcId,
                             const std::string& sourcePath,
-                            const std::string& ptoIsaRoot,
                             int coreType);
 
     /**
@@ -341,6 +340,7 @@ private:
     int deviceId_{-1};
     int numCores_{0};
     std::vector<uint8_t> aicoreKernelBinary_;
+    std::string ptoIsaRoot_;  // PTO-ISA root directory for kernel compilation
 
     // Memory management
     MemoryAllocator memAlloc_;

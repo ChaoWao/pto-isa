@@ -26,6 +26,7 @@ class TestRealEnvironment:
         runtime_dir = Path(__file__).parent.parent
         host_dir = runtime_dir / "src" / "host"
         graph_dir = runtime_dir / "tests" / "example_graph_impl"
+        host_dir = runtime_dir / "tests" / "example_host_impl"
 
         assert host_dir.exists(), f"Host directory not found: {host_dir}"
         assert graph_dir.exists(), f"Graph directory not found: {graph_dir}"
@@ -35,7 +36,7 @@ class TestRealEnvironment:
 
         # Use graph as both include and source directory
         include_dirs = [str(graph_dir)]
-        source_dirs = [str(graph_dir)]
+        source_dirs = [str(graph_dir), str(host_dir)]
 
         # Compile
         binary_data = compiler.compile(
@@ -45,8 +46,8 @@ class TestRealEnvironment:
         )
 
         # Verify binary data
+        assert isinstance(binary_data, bytes), "Binary data should be bytes"
         assert len(binary_data) > 0, "Binary data should not be empty"
-        assert isinstance(binary_data, bytes)
 
 
 if __name__ == "__main__":

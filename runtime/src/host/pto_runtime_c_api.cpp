@@ -48,15 +48,17 @@ int ValidateGraph(GraphHandle graph) {
 
 int DeviceRunner_Init(int device_id, int num_cores,
                       const uint8_t* aicpu_binary, size_t aicpu_size,
-                      const uint8_t* aicore_binary, size_t aicore_size) {
-    if (aicpu_binary == NULL || aicpu_size == 0 || aicore_binary == NULL || aicore_size == 0) {
+                      const uint8_t* aicore_binary, size_t aicore_size,
+                      const char* pto_isa_root) {
+    if (aicpu_binary == NULL || aicpu_size == 0 || aicore_binary == NULL || aicore_size == 0 ||
+        pto_isa_root == NULL) {
         return -1;
     }
     try {
         DeviceRunner& runner = DeviceRunner::Get();
         std::vector<uint8_t> aicpuVec(aicpu_binary, aicpu_binary + aicpu_size);
         std::vector<uint8_t> aicoreVec(aicore_binary, aicore_binary + aicore_size);
-        return runner.Init(device_id, num_cores, aicpuVec, aicoreVec);
+        return runner.Init(device_id, num_cores, aicpuVec, aicoreVec, std::string(pto_isa_root));
     } catch (...) {
         return -1;
     }
@@ -95,14 +97,13 @@ int DeviceRunner_Finalize(void) {
 
 int DeviceRunner_CompileAndLoadKernel(int func_id,
                                       const char* kernel_path,
-                                      const char* pto_isa_root, int core_type) {
-    if (kernel_path == NULL || pto_isa_root == NULL) {
+                                      int core_type) {
+    if (kernel_path == NULL) {
         return -1;
     }
     try {
         DeviceRunner& runner = DeviceRunner::Get();
-        return runner.CompileAndLoadKernel(func_id, std::string(kernel_path),
-                                           std::string(pto_isa_root), core_type);
+        return runner.CompileAndLoadKernel(func_id, std::string(kernel_path), core_type);
     } catch (...) {
         return -1;
     }

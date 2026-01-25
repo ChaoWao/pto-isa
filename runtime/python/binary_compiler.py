@@ -129,7 +129,7 @@ class BinaryCompiler:
         target_platform: str,
         include_dirs: List[str],
         source_dirs: List[str]
-    ) -> Union[bytes, str]:
+    ) -> bytes:
         """
         Compile binary for the specified target platform.
 
@@ -139,8 +139,7 @@ class BinaryCompiler:
             source_dirs: List of source directory paths
 
         Returns:
-            For "aicore" and "aicpu": Compiled binary data as bytes
-            For "host": Path to the compiled .so file as str
+            Compiled binary data as bytes for all platforms
 
         Raises:
             ValueError: If target platform is invalid
@@ -185,11 +184,11 @@ class BinaryCompiler:
         self,
         include_dirs: List[str],
         source_dirs: List[str],
-    ) -> str:
-        """Compile host executable and save to persistent location.
+    ) -> bytes:
+        """Compile host executable.
 
         Returns:
-            Path to the compiled .so file
+            Compiled binary data as bytes
         """
         toolchain = self.host_toolchain
         cmake_args = toolchain.gen_cmake_args(include_dirs, source_dirs)
@@ -200,15 +199,7 @@ class BinaryCompiler:
             cmake_source_dir, cmake_args, output_binary_name, platform="Host"
         )
 
-        # Save host binary to a permanent location
-        output_dir = Path(__file__).parent / "build"
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / output_binary_name
-
-        with open(output_path, "wb") as f:
-            f.write(binary_data)
-
-        return str(output_path)
+        return binary_data
 
     def _run_compilation(
         self,

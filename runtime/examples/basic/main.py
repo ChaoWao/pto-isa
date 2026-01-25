@@ -81,7 +81,7 @@ def check_and_build_runtime():
             str(example_root / "graph"),
         ]
         host_source_dirs = [
-            str(example_root),
+            str(example_root / "host"),
             str(example_root / "graph"),
         ]
         host_binary = compiler.compile("host", host_include_dirs, host_source_dirs)
@@ -123,12 +123,12 @@ def main():
     # Load runtime library and get bindings
     print("\n=== Loading Runtime Library ===")
     DeviceRunner, Graph = load_runtime(host_binary)
-    print(f"Loaded runtime from {host_binary}")
+    print(f"Loaded runtime ({len(host_binary)} bytes)")
 
     # Initialize DeviceRunner
     print("\n=== Initializing DeviceRunner ===")
     runner = DeviceRunner()
-    runner.init(device_id, 3, aicpu_binary, aicore_binary)
+    runner.init(device_id, 3, aicpu_binary, aicore_binary, pto_isa_root)
 
     # Create and initialize graph
     # C++ handles: allocate Graph, allocate tensors, build tasks, initialize data

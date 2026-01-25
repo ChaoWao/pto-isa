@@ -14,29 +14,6 @@
 #include <iostream>
 #include <vector>
 
-/**
- * Read a file into a byte buffer
- *
- * @param path  Path to the file
- * @param buf   Buffer to store file contents
- * @return 0 on success, -1 on failure
- */
-static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {
-    std::ifstream fs(path, std::ios::binary | std::ios::ate);
-    if (!fs.is_open()) {
-        std::cerr << "无法打开内核文件: " << path << '\n';
-        return -1;
-    }
-    std::streamsize size = fs.tellg();
-    fs.seekg(0, std::ios::beg);
-    buf.resize(static_cast<size_t>(size));
-    if (!fs.read(reinterpret_cast<char *>(buf.data()), size)) {
-        std::cerr << "读取内核文件失败: " << path << '\n';
-        return -1;
-    }
-    return 0;
-}
-
 // =============================================================================
 // KernelArgsHelper Implementation
 // =============================================================================
@@ -157,7 +134,7 @@ DeviceRunner &DeviceRunner::Get() {
 }
 
 int DeviceRunner::Init(int deviceId, int numCores, const std::vector<uint8_t>& aicpuSoBinary,
-                       const std::vector<uint8_t>& aicoreKernelBinary) {
+                       const std::vector<uint8_t>& aicoreKernelBinary, const std::string& ptoIsaRoot) {
     if (initialized_) {
         std::cerr << "Error: DeviceRunner already initialized\n";
         return -1;
@@ -166,6 +143,7 @@ int DeviceRunner::Init(int deviceId, int numCores, const std::vector<uint8_t>& a
     deviceId_ = deviceId;
     numCores_ = numCores;
     aicoreKernelBinary_ = aicoreKernelBinary;
+    ptoIsaRoot_ = ptoIsaRoot;
 
     // Set device
     int rc = rtSetDevice(deviceId);
@@ -268,11 +246,12 @@ int DeviceRunner::Init(int deviceId, int numCores, const std::vector<uint8_t>& a
     kernelArgs_.args.core_num = numCores;
 
     // NOTE: Kernel registration and loading moved to runtime compilation
-    // Users should call CompileAndLoadKernel() after Init() to compile and load kernels
+    // Users should call Init() with ptoIsaRoot, then compile kernels:
     // Example:
-    //   runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", ptoIsaRoot);
-    //   runner.CompileAndLoadKernel(1, "./aicore/kernels/kernel_add_scalar.cpp", ptoIsaRoot);
-    //   runner.CompileAndLoadKernel(2, "./aicore/kernels/kernel_mul.cpp", ptoIsaRoot);
+    //   runner.Init(0, 3, aicpuBinary, aicoreBinary, "/path/to/pto-isa");
+    //   runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", 1);
+    //   runner.CompileAndLoadKernel(1, "./aicore/kernels/kernel_add_scalar.cpp", 1);
+    //   runner.CompileAndLoadKernel(2, "./aicore/kernels/kernel_mul.cpp", 1);
 
     initialized_ = true;
     std::cout << "DeviceRunner initialized: device=" << deviceId << ", cores=" << numCores << '\n';
@@ -651,7 +630,6 @@ uint64_t DeviceRunner::GetFunctionBinAddr(int funcId) {
 
 int DeviceRunner::CompileAndLoadKernel(int funcId,
                                        const std::string& sourcePath,
-                                       const std::string& ptoIsaRoot,
                                        int coreType) {
     if (!initialized_) {
         std::cerr << "Error: DeviceRunner not initialized. Call Init() first.\n";
@@ -665,7 +643,7 @@ int DeviceRunner::CompileAndLoadKernel(int funcId,
     // Step 1: Compile the kernel source
     std::string outputPath;
     std::string errorMsg;
-    int rc = KernelCompiler::CompileKernel(sourcePath, ptoIsaRoot, coreType, outputPath, errorMsg);
+    int rc = KernelCompiler::CompileKernel(sourcePath, ptoIsaRoot_, coreType, outputPath, errorMsg);
     if (rc != 0) {
         std::cerr << "Error: Kernel compilation failed: " << errorMsg << '\n';
         return -1;

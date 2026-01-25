@@ -70,11 +70,13 @@ int ValidateGraph(GraphHandle graph);
  * @param aicpu_size             Size of AICPU binary in bytes
  * @param aicore_binary          Binary data of AICore kernel
  * @param aicore_size            Size of AICore binary in bytes
+ * @param pto_isa_root           Path to PTO-ISA root directory (headers location)
  * @return 0 on success, error code on failure
  */
 int DeviceRunner_Init(int device_id, int num_cores,
                       const uint8_t* aicpu_binary, size_t aicpu_size,
-                      const uint8_t* aicore_binary, size_t aicore_size);
+                      const uint8_t* aicore_binary, size_t aicore_size,
+                      const char* pto_isa_root);
 
 /**
  * Execute a graph on the device.
@@ -110,13 +112,12 @@ int DeviceRunner_Finalize(void);
  *
  * @param func_id       Function identifier for this kernel
  * @param kernel_path   Path to kernel source file (.cpp)
- * @param pto_isa_root  Path to PTO-ISA root directory
  * @param core_type     Core type: 0=AIC, 1=AIV (default 1)
  * @return 0 on success, error code on failure
  */
 int DeviceRunner_CompileAndLoadKernel(int func_id,
                                       const char* kernel_path,
-                                      const char* pto_isa_root, int core_type);
+                                      int core_type);
 
 #ifdef __cplusplus
 }  /* extern "C" */
