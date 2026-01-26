@@ -7,7 +7,7 @@
 #include "kernel_args.h"
 
 // Forward declaration of execute function (defined in execute.cpp)
-extern int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
+extern int execute(Graph& g, Handshake* hank, int thread_num, int thread_idx,
                    const int* cur_thread_cores, int core_num);
 
 constexpr int MAX_AICPU_THREADS = 4;
@@ -149,7 +149,7 @@ struct MultiThreadManager {
 
         DEV_INFO("Thread %d: Start", thread_idx);
 
-        const int* cur_thread_cores = core_assignments_[threadId];
+        const int* cur_thread_cores = core_assignments_[thread_idx];
 
         auto rc = HankAiCore(arg, thread_idx, cur_thread_cores);
         if (rc != 0) {
@@ -160,7 +160,7 @@ struct MultiThreadManager {
             Graph* g = kargs->graphArgs;
             Handshake* hank = (Handshake*)kargs->hankArgs;
             DEV_INFO("Thread %d: Graph has %d tasks", thread_idx, g->get_task_count());
-            int completed = execute(*g, hank, thread_num_, threadId, cur_thread_cores, cores_per_thread_);
+            int completed = execute(*g, hank, thread_num_, thread_idx, cur_thread_cores, cores_per_thread_);
             DEV_INFO("Thread %d: Executed %d tasks from graph", thread_idx, completed);
         }
 

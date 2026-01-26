@@ -22,7 +22,6 @@ std::atomic<bool> init_done_{false};
 
 // Thread synchronization for cleanup
 std::atomic<int> finished_count_{0};
-int total_threads_ = 0;
 
 }  // namespace
 
@@ -48,7 +47,7 @@ int total_threads_ = 0;
  * @param g Task graph containing all tasks and dependencies
  * @param hank Array of handshake buffers (one per core)
  * @param thread_num Total number of AICPU scheduler threads
- * @param threadId Thread identifier (0, 1, 2, ...)
+ * @param thread_idx Thread identifier (0, 1, 2, ...)
  * @param cur_thread_cores Array of core IDs assigned to this thread
  * @param core_num Number of cores assigned to this thread
  * @return Number of tasks completed by this thread
@@ -86,8 +85,6 @@ int execute(Graph& g, Handshake* hank, int thread_num, int thread_idx,
 
         DEV_INFO("Thread %d: Initial ready tasks: AIC=%d, AIV=%d", thread_idx, aic_count, aiv_count);
 
-        // Store total threads for cleanup synchronization
-        total_threads_ = thread_num;
         finished_count_.store(0, std::memory_order_release);
 
         // Signal initialization complete
@@ -212,7 +209,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int thread_idx,
 
     // Wait for all threads to complete, then reset shared state
     int prev_finished = finished_count_.fetch_add(1, std::memory_order_acq_rel);
-    if (prev_finished + 1 == total_threads_) {
+    if (prev_finished + 1 == thread_num) {
         // Last thread resets shared state for next execution
         DEV_INFO("Thread %d: Last thread, resetting shared state", thread_idx);
         ready_count_aic_.store(0, std::memory_order_release);
