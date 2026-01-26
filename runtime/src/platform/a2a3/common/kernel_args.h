@@ -23,6 +23,25 @@ extern "C" {
 #endif
 
 /**
+ * DeviceArgs structure for AICPU device arguments
+ *
+ * This structure contains pointers to device memory for the AICPU shared object.
+ * The layout is hardcoded in libaicpu_extend_kernels.so, which expects specific
+ * offsets for aicpuSoBin and aicpuSoLen fields.
+ */
+struct DeviceArgs {
+    uint32_t nrAic{0};
+    uint32_t nrAiv{0};
+    uint32_t nrValidAic{0};
+    uint32_t nrAicpu{0};
+    uint64_t unused1[10] = {0};
+    uint64_t aicpuSoBin{0};
+    uint64_t aicpuSoLen{0};
+    uint64_t unused2[4] = {0};
+    uint32_t scheCpuNum{0};
+};
+
+/**
  * Kernel arguments structure
  *
  * This structure is passed to both AICPU and AICore kernels by the host.

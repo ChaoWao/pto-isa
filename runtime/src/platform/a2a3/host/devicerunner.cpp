@@ -133,7 +133,8 @@ DeviceRunner &DeviceRunner::Get() {
     return runner;
 }
 
-int DeviceRunner::Init(int deviceId, const std::vector<uint8_t>& aicpuSoBinary,
+int DeviceRunner::Init(int deviceId, int aicpuThreadNum, int blockdimPerThread,
+                       const std::vector<uint8_t>& aicpuSoBinary,
                        const std::vector<uint8_t>& aicoreKernelBinary, const std::string& ptoIsaRoot) {
     if (initialized_) {
         std::cerr << "Error: DeviceRunner already initialized\n";
@@ -141,6 +142,10 @@ int DeviceRunner::Init(int deviceId, const std::vector<uint8_t>& aicpuSoBinary,
     }
 
     deviceId_ = deviceId;
+    aicpuThreadNum_ = aicpuThreadNum;
+    blockdimPerThread_ = blockdimPerThread;
+    blockDim_ = blockdimPerThread_ * aicpuThreadNum_;
+    numCores_ = aicpuThreadNum_ * blockdimPerThread_ * coresPerBlockdim_;
     aicoreKernelBinary_ = aicoreKernelBinary;
     ptoIsaRoot_ = ptoIsaRoot;
 
@@ -187,6 +192,11 @@ int DeviceRunner::Init(int deviceId, const std::vector<uint8_t>& aicpuSoBinary,
     // Initialize device args
     deviceArgs_.aicpuSoBin = soInfo_.aicpuSoBin;
     deviceArgs_.aicpuSoLen = soInfo_.aicpuSoLen;
+    deviceArgs_.nrAic = aicpuThreadNum_ * blockdimPerThread_;
+    deviceArgs_.nrAiv = aicpuThreadNum_ * blockdimPerThread_ * 2;
+    deviceArgs_.nrValidAic = aicpuThreadNum_ * blockdimPerThread_;
+    deviceArgs_.nrAicpu = aicpuThreadNum_;
+    deviceArgs_.scheCpuNum = aicpuThreadNum_;
     rc = kernelArgs_.InitDeviceArgs(deviceArgs_, memAlloc_);
     if (rc != 0) {
         std::cerr << "Error: InitDeviceArgs failed: " << rc << '\n';
@@ -204,7 +214,7 @@ int DeviceRunner::Init(int deviceId, const std::vector<uint8_t>& aicpuSoBinary,
     // NOTE: Kernel registration and loading moved to runtime compilation
     // Users should call Init() with ptoIsaRoot, then compile kernels:
     // Example:
-    //   runner.Init(0, aicpuBinary, aicoreBinary, "/path/to/pto-isa");
+    //   runner.Init(0, aicpuThreadNum, blockdimPerThread, aicpuBinary, aicoreBinary, "/path/to/pto-isa");
     //   runner.CompileAndLoadKernel(0, "./aicore/kernels/kernel_add.cpp", 1);
     //   runner.CompileAndLoadKernel(1, "./aicore/kernels/kernel_add_scalar.cpp", 1);
     //   runner.CompileAndLoadKernel(2, "./aicore/kernels/kernel_mul.cpp", 1);
@@ -473,7 +483,7 @@ int DeviceRunner::LauncherAicoreKernel(rtStream_t stream, KernelArgs *kernelArgs
     rtTaskCfgInfo_t cfg = {};
     cfg.schemMode = RT_SCHEM_MODE_BATCH;
 
-    rc = rtKernelLaunchWithHandleV2(binHandle, 0, 1, &rtArgs, nullptr, stream, &cfg);
+    rc = rtKernelLaunchWithHandleV2(binHandle, 0, blockDim_, &rtArgs, nullptr, stream, &cfg);
     if (rc != RT_ERROR_NONE) {
         std::cerr << "rtKernelLaunchWithHandleV2失败: " << rc << '\n';
         return rc;

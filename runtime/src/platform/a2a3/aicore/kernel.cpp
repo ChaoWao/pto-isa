@@ -124,7 +124,7 @@
          }
 
          // Execute task if assigned (task != 0 means valid Task* pointer)
-         if (my_hank->task != 0) {
+         if (my_hank->task != 0  && my_hank->task_status == 1) {
              __gm__ Task* task_ptr = reinterpret_cast<__gm__ Task*>(my_hank->task);
              execute_task(task_ptr);
              // Mark task as complete (task_status: 0=idle, 1=busy)

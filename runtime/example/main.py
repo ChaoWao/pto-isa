@@ -116,6 +116,11 @@ def main():
             print(f"Error: invalid deviceId argument: {sys.argv[1]}")
             return -1
 
+    # AICPU threading configuration
+    aicpu_thread_num = 3       # Number of AICPU scheduler threads (1-4)
+    blockdim_per_thread = 1    # Number of blockdim per thread
+    cores_per_blockdim = 3     # Number of cores per blockdim
+
     pto_isa_root = "/data/wcwxy/workspace/pypto/pto-isa"
 
     # Load runtime library and get bindings
@@ -126,7 +131,7 @@ def main():
     # Initialize DeviceRunner
     print("\n=== Initializing DeviceRunner ===")
     runner = DeviceRunner()
-    runner.init(device_id, aicpu_binary, aicore_binary, pto_isa_root)
+    runner.init(device_id, aicpu_thread_num, blockdim_per_thread, aicpu_binary, aicore_binary, pto_isa_root)
 
     # Create and initialize graph
     # C++ handles: allocate Graph, allocate tensors, build tasks, initialize data
@@ -137,7 +142,8 @@ def main():
     # Execute graph on device
     # Python now controls when the graph is executed
     print("\n=== Executing Graph on Device ===")
-    runner.run(graph, num_cores=3, launch_aicpu_num=1)
+    aicore_num = aicpu_thread_num * blockdim_per_thread * cores_per_blockdim
+    runner.run(graph, num_cores=aicore_num, launch_aicpu_num=aicpu_thread_num)
 
     # Validate results and cleanup
     # C++ handles: copy results from device, validate, free tensors, delete graph

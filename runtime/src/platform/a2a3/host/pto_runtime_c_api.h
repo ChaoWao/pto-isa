@@ -65,6 +65,8 @@ int ValidateGraph(GraphHandle graph);
  * Uses the DeviceRunner singleton internally.
  *
  * @param device_id              Device ID (0-15)
+ * @param aicpu_thread_num       Number of AICPU scheduling threads (1-4)
+ * @param blockdim_per_thread    Number of blockdim per thread
  * @param aicpu_binary           Binary data of AICPU shared object
  * @param aicpu_size             Size of AICPU binary in bytes
  * @param aicore_binary          Binary data of AICore kernel
@@ -72,7 +74,7 @@ int ValidateGraph(GraphHandle graph);
  * @param pto_isa_root           Path to PTO-ISA root directory (headers location)
  * @return 0 on success, error code on failure
  */
-int DeviceRunner_Init(int device_id,
+int DeviceRunner_Init(int device_id, int aicpu_thread_num, int blockdim_per_thread,
                       const uint8_t* aicpu_binary, size_t aicpu_size,
                       const uint8_t* aicore_binary, size_t aicore_size,
                       const char* pto_isa_root);

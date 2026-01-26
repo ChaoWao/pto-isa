@@ -9,7 +9,7 @@ Usage:
 
     DeviceRunner, Graph = load_runtime("/path/to/libpto_runtime.so")
     runner = DeviceRunner()
-    runner.init(device_id=0, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
+    runner.init(device_id=0, aicpu_thread_num=1, blockdim_per_thread=1, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
 
     graph = Graph()
     graph.initialize()
@@ -71,7 +71,7 @@ class RuntimeLibraryLoader:
         self.lib.ValidateGraph.restype = c_int
 
         # DeviceRunner functions
-        self.lib.DeviceRunner_Init.argtypes = [c_int,
+        self.lib.DeviceRunner_Init.argtypes = [c_int, c_int, c_int,
                                                POINTER(c_uint8), c_size_t,
                                                POINTER(c_uint8), c_size_t,
                                                c_char_p]
@@ -172,6 +172,8 @@ class DeviceRunner:
     def init(
         self,
         device_id: int,
+        aicpu_thread_num: int,
+        blockdim_per_thread: int,
         aicpu_binary: bytes,
         aicore_binary: bytes,
         pto_isa_root: str,
@@ -181,6 +183,8 @@ class DeviceRunner:
 
         Args:
             device_id: Device ID (0-15)
+            aicpu_thread_num: Number of AICPU scheduling threads (1-4)
+            blockdim_per_thread: Number of blockdim per thread
             aicpu_binary: Binary data of AICPU shared object
             aicore_binary: Binary data of AICore kernel
             pto_isa_root: Path to PTO-ISA root directory (headers location)
@@ -194,6 +198,8 @@ class DeviceRunner:
 
         rc = self.lib.DeviceRunner_Init(
             device_id,
+            aicpu_thread_num,
+            blockdim_per_thread,
             aicpu_array,
             len(aicpu_binary),
             aicore_array,
@@ -294,7 +300,7 @@ def load_runtime(lib_path: Union[str, Path, bytes]) -> tuple:
         DeviceRunner, Graph = load_runtime(host_binary)
 
         runner = DeviceRunner()
-        runner.init(device_id=0, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
+        runner.init(device_id=0, aicpu_thread_num=1, blockdim_per_thread=1, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
 
         graph = Graph()
         graph.initialize()

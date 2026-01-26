@@ -27,19 +27,6 @@
 class Graph;
 
 /**
- * DeviceArgs structure for AICPU device arguments
- *
- * This structure contains pointers to device memory for the AICPU shared object.
- * The layout is hardcoded in libaicpu_extend_kernels.so, which expects specific
- * offsets for aicpuSoBin and aicpuSoLen fields.
- */
-struct DeviceArgs {
-    uint64_t unused[12] = {0};
-    uint64_t aicpuSoBin{0};
-    uint64_t aicpuSoLen{0};
-};
-
-/**
  * Helper class for managing KernelArgs with device memory
  *
  * This class wraps KernelArgs and provides host-side initialization methods
@@ -152,12 +139,15 @@ public:
      * Must be called before any other operations.
      *
      * @param deviceId            Device ID (0-15)
+     * @param aicpuThreadNum      Number of AICPU scheduling threads (1-4)
+     * @param blockdimPerThread   Number of blockdim per thread
      * @param aicpuSoBinary       Binary data of AICPU shared object
      * @param aicoreKernelBinary  Binary data of AICore kernel
      * @param ptoIsaRoot          Path to PTO-ISA root directory (headers location)
      * @return 0 on success, error code on failure
      */
-    int Init(int deviceId, const std::vector<uint8_t>& aicpuSoBinary,
+    int Init(int deviceId, int aicpuThreadNum, int blockdimPerThread,
+             const std::vector<uint8_t>& aicpuSoBinary,
              const std::vector<uint8_t>& aicoreKernelBinary, const std::string& ptoIsaRoot);
 
     /**
@@ -342,6 +332,10 @@ private:
     bool initialized_{false};
     int deviceId_{-1};
     int numCores_{0};
+    int aicpuThreadNum_{1};
+    int blockdimPerThread_{1};
+    int blockDim_{1};
+    int coresPerBlockdim_{3};
     std::vector<uint8_t> aicoreKernelBinary_;
     std::string ptoIsaRoot_;  // PTO-ISA root directory for kernel compilation
 
