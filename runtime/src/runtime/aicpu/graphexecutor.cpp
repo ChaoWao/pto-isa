@@ -53,12 +53,12 @@ int total_threads_ = 0;
  * @param core_num Number of cores assigned to this thread
  * @return Number of tasks completed by this thread
  */
-int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
+int execute(Graph& g, Handshake* hank, int thread_num, int thread_idx,
             const int* cur_thread_cores, int core_num) {
 
     // Thread 0 initializes shared state
-    if (threadId == 0) {
-        DEV_INFO("Thread %d: Initializing graph executor", threadId);
+    if (thread_idx == 0) {
+        DEV_INFO("Thread %d: Initializing graph executor", thread_idx);
 
         total_tasks_.store(g.get_task_count(), std::memory_order_release);
         completed_tasks_.store(0, std::memory_order_release);
@@ -67,7 +67,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
         int initial_ready[GRAPH_MAX_TASKS];
         int initial_count = g.get_initial_ready_tasks(initial_ready);
 
-        DEV_INFO("Thread %d: Found %d initially ready tasks", threadId, initial_count);
+        DEV_INFO("Thread %d: Found %d initially ready tasks", thread_idx, initial_count);
 
         int aic_count = 0;
         int aiv_count = 0;
@@ -75,16 +75,16 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
             Task* task = g.get_task(initial_ready[i]);
             if (task->core_type == 0) {  // AIC
                 ready_queue_aic_[aic_count++] = initial_ready[i];
-                DEV_INFO("Thread %d: Task %d -> AIC queue", threadId, initial_ready[i]);
+                DEV_INFO("Thread %d: Task %d -> AIC queue", thread_idx, initial_ready[i]);
             } else {  // AIV
                 ready_queue_aiv_[aiv_count++] = initial_ready[i];
-                DEV_INFO("Thread %d: Task %d -> AIV queue", threadId, initial_ready[i]);
+                DEV_INFO("Thread %d: Task %d -> AIV queue", thread_idx, initial_ready[i]);
             }
         }
         ready_count_aic_.store(aic_count, std::memory_order_release);
         ready_count_aiv_.store(aiv_count, std::memory_order_release);
 
-        DEV_INFO("Thread %d: Initial ready tasks: AIC=%d, AIV=%d", threadId, aic_count, aiv_count);
+        DEV_INFO("Thread %d: Initial ready tasks: AIC=%d, AIV=%d", thread_idx, aic_count, aiv_count);
 
         // Store total threads for cleanup synchronization
         total_threads_ = thread_num;
@@ -99,7 +99,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
         }
     }
 
-    DEV_INFO("Thread %d: Starting execution with %d cores", threadId, core_num);
+    DEV_INFO("Thread %d: Starting execution with %d cores", thread_idx, core_num);
 
     int cur_thread_completed = 0;
     int cur_thread_tasks_in_flight = 0;
@@ -120,7 +120,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
                 Task* task = reinterpret_cast<Task*>(h->task);
                 int task_id = task->task_id;
 
-                DEV_INFO("Thread %d: Core %d completed task %d", threadId, core_id, task_id);
+                DEV_INFO("Thread %d: Core %d completed task %d", thread_idx, core_id, task_id);
 
                 // Update fanin of successors atomically and add to appropriate shared ready queue
                 for (int j = 0; j < task->fanout_count; j++) {
@@ -137,13 +137,13 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
                             int idx = ready_count_aic_.load(std::memory_order_relaxed);
                             ready_queue_aic_[idx] = dep_id;
                             ready_count_aic_.fetch_add(1, std::memory_order_release);
-                            DEV_INFO("Thread %d: Task %d became ready -> AIC queue", threadId, dep_id);
+                            DEV_INFO("Thread %d: Task %d became ready -> AIC queue", thread_idx, dep_id);
                         } else {  // AIV task
                             std::lock_guard<std::mutex> lock(ready_queue_aiv_mutex_);
                             int idx = ready_count_aiv_.load(std::memory_order_relaxed);
                             ready_queue_aiv_[idx] = dep_id;
                             ready_count_aiv_.fetch_add(1, std::memory_order_release);
-                            DEV_INFO("Thread %d: Task %d became ready -> AIV queue", threadId, dep_id);
+                            DEV_INFO("Thread %d: Task %d became ready -> AIV queue", thread_idx, dep_id);
                         }
                     }
                 }
@@ -179,7 +179,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
                             Task* task = g.get_task(task_id);
 
                             DEV_INFO("Thread %d: Dispatching AIC task %d to core %d",
-                                    threadId, task_id, core_id);
+                                    thread_idx, task_id, core_id);
 
                             h->task = reinterpret_cast<uint64_t>(task);
                             h->task_status = 1;  // Mark as busy
@@ -196,7 +196,7 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
                             Task* task = g.get_task(task_id);
 
                             DEV_INFO("Thread %d: Dispatching AIV task %d to core %d",
-                                    threadId, task_id, core_id);
+                                    thread_idx, task_id, core_id);
 
                             h->task = reinterpret_cast<uint64_t>(task);
                             h->task_status = 1;  // Mark as busy
@@ -208,13 +208,13 @@ int execute(Graph& g, Handshake* hank, int thread_num, int threadId,
         }
     }
 
-    DEV_INFO("Thread %d: Execution complete, completed %d tasks", threadId, cur_thread_completed);
+    DEV_INFO("Thread %d: Execution complete, completed %d tasks", thread_idx, cur_thread_completed);
 
     // Wait for all threads to complete, then reset shared state
     int prev_finished = finished_count_.fetch_add(1, std::memory_order_acq_rel);
     if (prev_finished + 1 == total_threads_) {
         // Last thread resets shared state for next execution
-        DEV_INFO("Thread %d: Last thread, resetting shared state", threadId);
+        DEV_INFO("Thread %d: Last thread, resetting shared state", thread_idx);
         ready_count_aic_.store(0, std::memory_order_release);
         ready_count_aiv_.store(0, std::memory_order_release);
         completed_tasks_.store(0, std::memory_order_release);
