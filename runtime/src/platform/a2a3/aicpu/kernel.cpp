@@ -89,20 +89,20 @@ struct MultiThreadManager {
      * graph execution begins.
      *
      * @param arg Pointer to KernelArgs structure containing handshake buffers
-     * @param threadIdx Thread index
+     * @param thread_idx Thread index
      * @param cur_thread_cores Array of core IDs assigned to this thread
      * @return 0 on success
      */
-    int HankAiCore(void *arg, int threadIdx, const int* cur_thread_cores) {
+    int HankAiCore(void *arg, int thread_idx, const int* cur_thread_cores) {
         auto kargs = (KernelArgs *)arg;
         Handshake* all_hanks = (Handshake*)kargs->hankArgs;
 
-        DEV_INFO("Thread %d: Handshaking with %d cores", threadIdx, cores_per_thread_);
+        DEV_INFO("Thread %d: Handshaking with %d cores", thread_idx, cores_per_thread_);
 
         for (int i = 0; i < cores_per_thread_; i++) {
             int core_id = cur_thread_cores[i];
             Handshake* hank = &all_hanks[core_id];
-            DEV_INFO("Thread %d: AICPU hank addr = 0x%lx", threadIdx, (uint64_t)hank);
+            DEV_INFO("Thread %d: AICPU hank addr = 0x%lx", thread_idx, (uint64_t)hank);
             hank->aicpu_ready = 1;
         }
 
@@ -110,7 +110,7 @@ struct MultiThreadManager {
             int core_id = cur_thread_cores[i];
             Handshake* hank = &all_hanks[core_id];
             while (hank->aicore_done == 0) { }
-            DEV_INFO("Thread %d: success hank->aicore_done = %u", threadIdx, (uint64_t)hank->aicore_done);
+            DEV_INFO("Thread %d: success hank->aicore_done = %u", thread_idx, (uint64_t)hank->aicore_done);
         }
         return 0;
     }
@@ -122,36 +122,36 @@ struct MultiThreadManager {
      * their execution loops and terminate gracefully.
      *
      * @param arg Pointer to KernelArgs structure containing handshake buffers
-     * @param threadIdx Thread index
+     * @param thread_idx Thread index
      * @param cur_thread_cores Array of core IDs assigned to this thread
      * @return 0 on success
      */
-    int ShutdownAiCore(void *arg, int threadIdx, const int* cur_thread_cores) {
+    int ShutdownAiCore(void *arg, int thread_idx, const int* cur_thread_cores) {
         auto kargs = (KernelArgs *)arg;
         Handshake* all_hanks = (Handshake*)kargs->hankArgs;
 
-        DEV_INFO("Thread %d: Shutting down %d cores", threadIdx, cores_per_thread_);
+        DEV_INFO("Thread %d: Shutting down %d cores", thread_idx, cores_per_thread_);
 
         for (int i = 0; i < cores_per_thread_; i++) {
             int core_id = cur_thread_cores[i];
             Handshake* hank = &all_hanks[core_id];
-            DEV_INFO("Thread %d: AICPU hank addr = 0x%lx", threadIdx, (uint64_t)hank);
+            DEV_INFO("Thread %d: AICPU hank addr = 0x%lx", thread_idx, (uint64_t)hank);
             hank->control = 1;
         }
-        DEV_INFO("Thread %d: Shutdown complete", threadIdx);
+        DEV_INFO("Thread %d: Shutdown complete", thread_idx);
         return 0;
     }
 
     int Run(void *arg) {
-        int threadId = thread_idx_++;
+        int thread_idx = thread_idx_++;
 
         auto kargs = (KernelArgs *)arg;
 
-        DEV_INFO("Thread %d: Start", threadId);
+        DEV_INFO("Thread %d: Start", thread_idx);
 
         const int* cur_thread_cores = core_assignments_[threadId];
 
-        auto rc = HankAiCore(arg, threadId, cur_thread_cores);
+        auto rc = HankAiCore(arg, thread_idx, cur_thread_cores);
         if (rc != 0) {
             return rc;
         }
@@ -159,17 +159,17 @@ struct MultiThreadManager {
         if (kargs->graphArgs != nullptr) {
             Graph* g = kargs->graphArgs;
             Handshake* hank = (Handshake*)kargs->hankArgs;
-            DEV_INFO("Thread %d: Graph has %d tasks", threadId, g->get_task_count());
+            DEV_INFO("Thread %d: Graph has %d tasks", thread_idx, g->get_task_count());
             int completed = execute(*g, hank, thread_num_, threadId, cur_thread_cores, cores_per_thread_);
-            DEV_INFO("Thread %d: Executed %d tasks from graph", threadId, completed);
+            DEV_INFO("Thread %d: Executed %d tasks from graph", thread_idx, completed);
         }
 
-        rc = ShutdownAiCore(arg, threadId, cur_thread_cores);
+        rc = ShutdownAiCore(arg, thread_idx, cur_thread_cores);
         if (rc != 0) {
             return rc;
         }
 
-        DEV_INFO("Thread %d: Completed", threadId);
+        DEV_INFO("Thread %d: Completed", thread_idx);
 
         return 0;
     }
