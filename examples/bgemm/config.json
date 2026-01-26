@@ -1,6 +1,6 @@
 {
   "example_name": "bgemm",
-  "target_platform": "ascend_a2a3_sim",
+  "target_platform": "ascend_a2a3",
   "enable_binary_expansion": true,
   "enable_task_dump": true,
   "enable_task_graph_pdf": true,

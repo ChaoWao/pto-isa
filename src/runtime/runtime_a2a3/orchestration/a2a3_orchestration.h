@@ -56,11 +56,17 @@ void a2a3_orch_submit_task(PTORuntime* rt, int32_t task_id);
 /**
  * Mark a task as complete and propagate to dependents.
  * Newly ready tasks are routed to appropriate queues.
+ * 
+ * NOTE: This is the orchestration-level completion, called from core layer.
+ * For workers completing tasks, use a2a3_core_complete_task() instead.
  */
 void a2a3_orch_complete_task(PTORuntime* rt, int32_t task_id);
 
 /**
- * Thread-safe version of task completion.
+ * Thread-safe version of task completion (orchestration level).
+ * 
+ * @deprecated Use a2a3_core_complete_task() from core layer instead.
+ * This function is kept for backward compatibility.
  */
 void a2a3_orch_complete_task_threadsafe(PTORuntime* rt, int32_t task_id);
 

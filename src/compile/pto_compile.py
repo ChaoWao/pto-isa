@@ -586,9 +586,9 @@ BACKENDS = {
     "ascend_a2a3": {
         "name": "Huawei Ascend A2/A3",
         "suffix": "_ascend_a2a3",
-        "extension": ".cpp",
+        "extension": ".c",
         "header_func": lambda: "// Auto-generated Ascend A2/A3 code\n",
-        "type_map": {},
+        "type_map": ARM64_TYPE_MAP,
     },
     "ascend_a5": {
         "name": "Huawei Ascend A5",
@@ -742,8 +742,14 @@ class MultiBackendCodeGenerator:
         return gen.generate(program)
     
     def generate_ascend_a2a3(self, program: PTOProgram) -> str:
-        """Generate Ascend A2/A3 code (convenience method)."""
-        return self.generate_ascend(program, target="a2a3")
+        """Generate Ascend A2/A3 code (same format as simulator, for real hardware)."""
+        gen = AscendA2A3SimCodeGenerator(
+            enable_fusion=self.enable_fusion,
+            analyze_buffers=self.analyze_buffers,
+            module=self.module,
+            target_mode="hardware"
+        )
+        return gen.generate(program)
     
     def generate_ascend_a5(self, program: PTOProgram) -> str:
         """Generate Ascend A5 code (convenience method)."""

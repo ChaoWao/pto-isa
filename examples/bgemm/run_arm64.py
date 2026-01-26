@@ -10,7 +10,7 @@ Configuration:
 - Task Graph PDF: True
 - Benchmark Orchestration: Enabled (tasks/ms)
 - Benchmark Runtime: Enabled (execution time)
-- Sequence Length: 1024 - 4096 tokens (step: 1024)
+- Sequence Length: 1024 - 16384 tokens (step: 1024)
 - Accuracy Test: True
 - Simulation: True
 """
@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import subprocess
 from datetime import datetime
 
@@ -47,7 +48,7 @@ CONFIG = {
     "benchmark_orchestration": True,  # tasks/ms without executing
     "benchmark_runtime": True,              # actual execution time
     "test_seq_len_min": 1024,
-    "test_seq_len_max": 4096,
+    "test_seq_len_max": 16384,
     "test_seq_len_step": 1024,
     "enable_accuracy_test": True,
     "enable_simulation": True,
@@ -143,8 +144,14 @@ def generate_code():
             print(f"  Creating module using {create_module_func.__name__}()...")
             module = create_module_func()
             
+            # Clean output directory for fresh compilation
+            platform_dir = os.path.join(OUTPUT_DIR, platform)
+            if os.path.exists(platform_dir):
+                print(f"  Cleaning output directory: {platform_dir}")
+                shutil.rmtree(platform_dir)
+            
             # Generate code - put source files in generated_code/ subfolder
-            platform_dir = ensure_dir(os.path.join(OUTPUT_DIR, platform))
+            platform_dir = ensure_dir(platform_dir)
             code_dir = ensure_dir(os.path.join(platform_dir, "generated_code"))
             
             gen = MultiBackendCodeGenerator(
@@ -162,10 +169,13 @@ def generate_code():
                 elif platform == "ascend_a2a3_sim":
                     code = gen.generate_ascend_a2a3_sim(prog)
                     ext = ".c"
+                elif platform == "ascend_a2a3":
+                    code = gen.generate_ascend_a2a3(prog)
+                    ext = ".c"
                 elif platform == "cuda":
                     code = gen.generate_cuda(prog)
                     ext = ".cu"
-                else:  # ascend
+                else:  # other ascend platforms (a5, etc.)
                     code = gen.generate_ascend(prog)
                     ext = ".cpp"
                 
@@ -271,12 +281,12 @@ def run_task_dump():
     platform = CONFIG['target_platform']
     platform_dir = os.path.join(OUTPUT_DIR, platform)
     
-    # Find executable
+    # Find executable (must be a file, not directory)
     exe_file = None
     for f in os.listdir(platform_dir):
         if not f.endswith(('.c', '.cu', '.cpp', '.txt', '.pdf', '.json', '.h')):
             exe_path = os.path.join(platform_dir, f)
-            if os.access(exe_path, os.X_OK):
+            if os.path.isfile(exe_path) and os.access(exe_path, os.X_OK):
                 exe_file = exe_path
                 break
     
@@ -373,8 +383,8 @@ def generate_task_graph_pdf():
         print("  No task graph file found")
         return True
     
-    # Try to use visualize_taskgraph.py if available
-    vis_script = os.path.join(ROOT_DIR, "visualize_taskgraph.py")
+    # Try to use visualize_taskgraph.py if available (in scripts/ directory)
+    vis_script = os.path.join(ROOT_DIR, "scripts", "visualize_taskgraph.py")
     if os.path.exists(vis_script):
         print(f"  Using visualize_taskgraph.py")
         cmd = f"python3 {vis_script} {txt_file}"
@@ -385,7 +395,7 @@ def generate_task_graph_pdf():
         else:
             print(f"  Warning: PDF generation failed: {stderr}")
     else:
-        print("  visualize_taskgraph.py not found")
+        print("  visualize_taskgraph.py not found at {vis_script}")
     
     return True
 

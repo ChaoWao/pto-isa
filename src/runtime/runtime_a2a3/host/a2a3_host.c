@@ -2,9 +2,11 @@
  * PTO Runtime - Ascend A2/A3 Host Layer Implementation
  * 
  * This file implements the host CPU interface for A2A3 execution.
+ * Worker threads and task execution are delegated to the core layer.
  */
 
 #include "a2a3_host.h"
+#include "../core/a2a3_core_worker.h"
 #include <time.h>
 
 // =============================================================================
@@ -16,112 +18,6 @@ void pto_runtime_enable_a2a3_sim(PTORuntime* rt, int32_t num_vector_workers, int
     a2a3_orch_init(rt, num_vector_workers, num_cube_workers);
     DEBUG_PRINT("[A2A3 Host] Simulation mode enabled: %d vector + %d cube workers\n",
                 num_vector_workers, num_cube_workers);
-}
-
-// =============================================================================
-// Task Execution
-// =============================================================================
-
-static void execute_task_a2a3(PTORuntime* rt, int32_t task_id, int32_t worker_id) {
-    int32_t slot = PTO_TASK_SLOT(task_id);
-    PendingTask* task = &rt->pend_task[slot];
-    
-    DEBUG_PRINT("[A2A3 Host] Worker %d executing task %d: %s\n", 
-                worker_id, task_id, task->func_name);
-    
-    // Build argument array
-    void* args[PTO_MAX_ARGS * 2];
-    int arg_idx = 0;
-    
-    for (int i = 0; i < task->num_args; i++) {
-        TaskArg* arg = &task->args[i];
-        float* base_ptr = (float*)arg->region.raw_tensor;
-        int64_t offset = arg->region.row_offset * arg->region.cols + arg->region.col_offset;
-        args[arg_idx++] = (void*)(base_ptr + offset);
-    }
-    
-    // Simulation mode: use cycle cost function
-    if (rt->simulation_mode && task->cycle_func) {
-        int64_t cycle_cost = task->cycle_func(args, task->num_args);
-        
-        int64_t worker_current = pto_trace_get_cycle(worker_id);
-        int64_t actual_start = (worker_current > task->earliest_start_cycle) ? 
-            worker_current : task->earliest_start_cycle;
-        int64_t actual_end = actual_start + cycle_cost;
-        
-        task->end_cycle = actual_end;
-        
-        pto_trace_record_with_time(worker_id, task->func_name, actual_start, actual_end);
-        DEBUG_PRINT("[A2A3 Host] Task %d simulated: %lld cycles\n", 
-                    task_id, (long long)cycle_cost);
-    }
-    // Normal mode: execute actual function
-    else if (task->func_ptr) {
-        PTOInCoreFunc func = (PTOInCoreFunc)task->func_ptr;
-        func(args, task->num_args);
-    }
-}
-
-// =============================================================================
-// Worker Threads
-// =============================================================================
-
-typedef struct {
-    PTORuntime* rt;
-    int worker_id;
-    bool is_cube_worker;
-} A2A3WorkerContext;
-
-static void* vector_worker_func(void* arg) {
-    A2A3WorkerContext* ctx = (A2A3WorkerContext*)arg;
-    PTORuntime* rt = ctx->rt;
-    int worker_id = ctx->worker_id;
-    
-    DEBUG_PRINT("[A2A3 Host] Vector worker %d started\n", worker_id);
-    
-    while (!rt->shutdown_requested) {
-        int32_t task_id = a2a3_orch_get_vector_task_blocking(rt);
-        
-        if (task_id < 0) {
-            if (rt->shutdown_requested) break;
-            if (rt->execution_started && 
-                rt->total_tasks_completed >= rt->total_tasks_scheduled) break;
-            continue;
-        }
-        
-        execute_task_a2a3(rt, task_id, worker_id);
-        a2a3_orch_complete_task_threadsafe(rt, task_id);
-    }
-    
-    DEBUG_PRINT("[A2A3 Host] Vector worker %d exiting\n", worker_id);
-    free(ctx);
-    return NULL;
-}
-
-static void* cube_worker_func(void* arg) {
-    A2A3WorkerContext* ctx = (A2A3WorkerContext*)arg;
-    PTORuntime* rt = ctx->rt;
-    int worker_id = ctx->worker_id;
-    
-    DEBUG_PRINT("[A2A3 Host] Cube worker %d started\n", worker_id);
-    
-    while (!rt->shutdown_requested) {
-        int32_t task_id = a2a3_orch_get_cube_task_blocking(rt);
-        
-        if (task_id < 0) {
-            if (rt->shutdown_requested) break;
-            if (rt->execution_started && 
-                rt->total_tasks_completed >= rt->total_tasks_scheduled) break;
-            continue;
-        }
-        
-        execute_task_a2a3(rt, task_id, worker_id);
-        a2a3_orch_complete_task_threadsafe(rt, task_id);
-    }
-    
-    DEBUG_PRINT("[A2A3 Host] Cube worker %d exiting\n", worker_id);
-    free(ctx);
-    return NULL;
 }
 
 // =============================================================================
@@ -187,7 +83,7 @@ int runtime_entry_a2a3(PTOOrchFunc orch_func, void* user_data,
         ctx->worker_id = i;
         ctx->is_cube_worker = false;
         
-        if (pthread_create(&rt->workers[i], NULL, vector_worker_func, ctx) != 0) {
+        if (pthread_create(&rt->workers[i], NULL, a2a3_vector_worker_func, ctx) != 0) {
             fprintf(stderr, "[A2A3 Host] ERROR: Failed to create vector worker %d\n", i);
             free(ctx);
             rt->shutdown_requested = true;
@@ -213,7 +109,7 @@ int runtime_entry_a2a3(PTOOrchFunc orch_func, void* user_data,
         ctx->worker_id = worker_idx;
         ctx->is_cube_worker = true;
         
-        if (pthread_create(&rt->workers[worker_idx], NULL, cube_worker_func, ctx) != 0) {
+        if (pthread_create(&rt->workers[worker_idx], NULL, a2a3_cube_worker_func, ctx) != 0) {
             fprintf(stderr, "[A2A3 Host] ERROR: Failed to create cube worker %d\n", i);
             free(ctx);
             rt->shutdown_requested = true;

@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import subprocess
 from datetime import datetime
 
@@ -143,9 +144,22 @@ def generate_code():
             print(f"  Creating module using {create_module_func.__name__}()...")
             module = create_module_func()
             
-            # Generate code - put source files in generated_code/ subfolder
-            platform_dir = ensure_dir(os.path.join(OUTPUT_DIR, platform))
+            # Clean output directory for fresh compilation
+            platform_dir = os.path.join(OUTPUT_DIR, platform)
+            if os.path.exists(platform_dir):
+                print(f"  Cleaning output directory: {platform_dir}")
+                shutil.rmtree(platform_dir)
+            
+            # Generate code - organize into subfolders for Ascend platforms
+            platform_dir = ensure_dir(platform_dir)
             code_dir = ensure_dir(os.path.join(platform_dir, "generated_code"))
+            
+            # For Ascend A2A3 platforms, organize into subfolders
+            is_a2a3_platform = platform in ("ascend_a2a3", "ascend_a2a3_sim")
+            if is_a2a3_platform:
+                orch_dir = ensure_dir(os.path.join(code_dir, "orchestration"))
+                aic_dir = ensure_dir(os.path.join(code_dir, "kernels", "aic"))  # AI Core Cube
+                aiv_dir = ensure_dir(os.path.join(code_dir, "kernels", "aiv"))  # AI Core Vector
             
             gen = MultiBackendCodeGenerator(
                 enable_fusion=True,
@@ -154,7 +168,24 @@ def generate_code():
             )
             
             for func_name, prog in module.functions.items():
-                print(f"  Generating {platform} code for: {func_name}")
+                # Determine function type
+                is_incore = getattr(prog, 'is_in_core', True)
+                is_cube = getattr(prog, 'is_cube', False)
+                
+                if is_a2a3_platform:
+                    if not is_incore:  # Orchestration function
+                        func_type_str = "Orchestration"
+                        target_dir = orch_dir
+                    elif is_cube:  # InCore Cube function
+                        func_type_str = "InCore Cube (AIC)"
+                        target_dir = aic_dir
+                    else:  # InCore Vector function
+                        func_type_str = "InCore Vector (AIV)"
+                        target_dir = aiv_dir
+                    print(f"  Generating {platform} code for: {func_name} [{func_type_str}]")
+                else:
+                    target_dir = code_dir
+                    print(f"  Generating {platform} code for: {func_name}")
                 
                 if platform == "arm64":
                     code = gen.generate_arm64(prog)
@@ -162,14 +193,17 @@ def generate_code():
                 elif platform == "ascend_a2a3_sim":
                     code = gen.generate_ascend_a2a3_sim(prog)
                     ext = ".c"
+                elif platform == "ascend_a2a3":
+                    code = gen.generate_ascend_a2a3(prog)
+                    ext = ".c"
                 elif platform == "cuda":
                     code = gen.generate_cuda(prog)
                     ext = ".cu"
-                else:  # ascend
+                else:  # other ascend platforms (a5, etc.)
                     code = gen.generate_ascend(prog)
                     ext = ".cpp"
                 
-                output_file = os.path.join(code_dir, f"{func_name}{ext}")
+                output_file = os.path.join(target_dir, f"{func_name}{ext}")
                 with open(output_file, 'w') as f:
                     f.write(code)
                 print(f"    -> {output_file}")
@@ -205,28 +239,41 @@ def compile_code():
         print(f"  No generated code found in {code_dir}")
         return False
     
+    # Check for organized subfolder structure (A2A3 platforms)
+    is_a2a3_platform = platform in ("ascend_a2a3", "ascend_a2a3_sim")
+    orch_dir = os.path.join(code_dir, "orchestration") if is_a2a3_platform else code_dir
+    kernels_dir = os.path.join(code_dir, "kernels") if is_a2a3_platform else None
+    
     # Find orchestration file by checking:
-    # 1. 'orchestration' in filename
-    # 2. 'Function Type: Orchestration' in file content
-    # 3. 'int main(' in file content (for simulator with main entry)
+    # 1. In orchestration/ subfolder (for A2A3)
+    # 2. 'orchestration' in filename
+    # 3. 'Function Type: Orchestration' in file content
+    # 4. 'int main(' in file content (for simulator with main entry)
     orch_file = None
-    for f in os.listdir(code_dir):
-        if f.endswith('.c'):
-            fpath = os.path.join(code_dir, f)
-            if 'orchestration' in f.lower():
-                orch_file = fpath
-                break
-            try:
-                with open(fpath, 'r') as fp:
-                    content = fp.read()
-                    if 'Function Type: Orchestration' in content:
-                        orch_file = fpath
-                        break
-                    if 'int main(' in content:
-                        orch_file = fpath
-                        break
-            except:
-                pass
+    search_dirs = [orch_dir] if is_a2a3_platform and os.path.exists(orch_dir) else [code_dir]
+    
+    for search_dir in search_dirs:
+        if not os.path.exists(search_dir):
+            continue
+        for f in os.listdir(search_dir):
+            if f.endswith('.c'):
+                fpath = os.path.join(search_dir, f)
+                if 'orchestration' in f.lower() or 'dynamic' in f.lower():
+                    orch_file = fpath
+                    break
+                try:
+                    with open(fpath, 'r') as fp:
+                        content = fp.read()
+                        if 'Function Type: Orchestration' in content:
+                            orch_file = fpath
+                            break
+                        if 'int main(' in content:
+                            orch_file = fpath
+                            break
+                except:
+                    pass
+        if orch_file:
+            break
     
     if not orch_file:
         print("  No orchestration file found to compile")
@@ -244,7 +291,19 @@ def compile_code():
     if CONFIG['enable_task_dump']:
         compile_flags.append("-DPTO_TASK_DUMP")
     
-    cmd = f"gcc {' '.join(compile_flags)} -I{RUNTIME_DIR} -o {exe_path} {orch_file} -lpthread"
+    # Add include paths
+    include_paths = [f"-I{RUNTIME_DIR}"]
+    if is_a2a3_platform and kernels_dir and os.path.exists(kernels_dir):
+        # Add kernel directories to include path for InCore function headers
+        aic_dir = os.path.join(kernels_dir, "aic")
+        aiv_dir = os.path.join(kernels_dir, "aiv")
+        if os.path.exists(aic_dir):
+            include_paths.append(f"-I{aic_dir}")
+        if os.path.exists(aiv_dir):
+            include_paths.append(f"-I{aiv_dir}")
+        include_paths.append(f"-I{kernels_dir}")
+    
+    cmd = f"gcc {' '.join(compile_flags)} {' '.join(include_paths)} -o {exe_path} {orch_file} -lpthread"
     
     print(f"  Command: {cmd}")
     success, stdout, stderr = run_command(cmd, cwd=platform_dir)
