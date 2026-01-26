@@ -5,6 +5,11 @@
  * Vector and Cube core execution on Ascend A2/A3 NPU.
  */
 
+// POSIX definitions must come before any includes
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "a2a3_orchestration.h"
 #include <time.h>
 

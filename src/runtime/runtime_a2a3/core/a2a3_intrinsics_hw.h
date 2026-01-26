@@ -53,7 +53,8 @@
 #ifdef CANN_SDK_AVAILABLE
 // Include actual CANN SDK headers
 #include <acl/acl.h>
-#include <hccl/hccl.h>
+// Note: HCCL (collective communication) not needed for basic orchestration
+// #include <hccl/hccl.h>
 #endif
 
 #endif // A2A3_TARGET_HARDWARE

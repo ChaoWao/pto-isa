@@ -158,8 +158,8 @@ def generate_code():
             is_a2a3_platform = platform in ("ascend_a2a3", "ascend_a2a3_sim")
             if is_a2a3_platform:
                 orch_dir = ensure_dir(os.path.join(code_dir, "orchestration"))
-                aic_dir = ensure_dir(os.path.join(code_dir, "kernels", "aic"))  # AI Core Cube
-                aiv_dir = ensure_dir(os.path.join(code_dir, "kernels", "aiv"))  # AI Core Vector
+                aic_dir = ensure_dir(os.path.join(code_dir, "incore_aic"))  # AI Core Cube
+                aiv_dir = ensure_dir(os.path.join(code_dir, "incore_aiv"))  # AI Core Vector
             
             gen = MultiBackendCodeGenerator(
                 enable_fusion=True,
@@ -242,8 +242,13 @@ def compile_code():
     
     # Check for organized subfolder structure (A2A3 platforms)
     is_a2a3_platform = platform in ("ascend_a2a3", "ascend_a2a3_sim")
+    
+    # For ascend_a2a3 platform, compile to .so files
+    if platform == "ascend_a2a3":
+        return compile_ascend_a2a3(code_dir)
+    
+    # For other platforms, use the original compilation logic
     orch_dir = os.path.join(code_dir, "orchestration") if is_a2a3_platform else code_dir
-    kernels_dir = os.path.join(code_dir, "kernels") if is_a2a3_platform else None
     
     # Find orchestration file by checking:
     # 1. In orchestration/ subfolder (for A2A3)
@@ -294,15 +299,15 @@ def compile_code():
     
     # Add include paths
     include_paths = [f"-I{RUNTIME_DIR}"]
-    if is_a2a3_platform and kernels_dir and os.path.exists(kernels_dir):
-        # Add kernel directories to include path for InCore function headers
-        aic_dir = os.path.join(kernels_dir, "aic")
-        aiv_dir = os.path.join(kernels_dir, "aiv")
+    if is_a2a3_platform:
+        # Add InCore directories to include path for InCore function headers
+        aic_dir = os.path.join(code_dir, "incore_aic")
+        aiv_dir = os.path.join(code_dir, "incore_aiv")
         if os.path.exists(aic_dir):
             include_paths.append(f"-I{aic_dir}")
         if os.path.exists(aiv_dir):
             include_paths.append(f"-I{aiv_dir}")
-        include_paths.append(f"-I{kernels_dir}")
+        include_paths.append(f"-I{code_dir}")
     
     cmd = f"gcc {' '.join(compile_flags)} {' '.join(include_paths)} -o {exe_path} {orch_file} -lpthread"
     
@@ -315,6 +320,170 @@ def compile_code():
     else:
         print(f"  Compilation failed: {stderr}")
         return False
+
+
+def compile_ascend_a2a3(code_dir):
+    """
+    Compile generated code for Ascend A2/A3 platform.
+    
+    Compiles:
+    - orchestration/*.c → lib_orchestration.so (shared library)
+    - incore_aic/*.cpp → *.o (AICore Cube object files)
+    - incore_aiv/*.cpp → *.o (AICore Vector object files)
+    
+    Output files are saved in the same folder as source files.
+    """
+    import glob
+    
+    # Get ASCEND_HOME_PATH for toolchain
+    ascend_home = os.environ.get('ASCEND_HOME_PATH', '/usr/local/Ascend/ascend-toolkit/latest')
+    ccec_path = os.path.join(ascend_home, 'bin', 'ccec')
+    ld_path = os.path.join(ascend_home, 'bin', 'ld.lld')
+    
+    # Check if ccec compiler exists
+    if not os.path.exists(ccec_path):
+        print(f"  Warning: ccec compiler not found at {ccec_path}")
+        print(f"  Please set ASCEND_HOME_PATH environment variable")
+        print(f"  Skipping AICore kernel compilation")
+        ccec_available = False
+    else:
+        ccec_available = True
+    
+    success = True
+    
+    # Directory paths
+    orch_dir = os.path.join(code_dir, "orchestration")
+    aic_dir = os.path.join(code_dir, "incore_aic")
+    aiv_dir = os.path.join(code_dir, "incore_aiv")
+    
+    # Check if CANN SDK is available
+    cann_available = os.path.exists(os.path.join(ascend_home, 'include', 'acl', 'acl.h'))
+    if not cann_available:
+        print(f"  Note: CANN SDK not found, using stub compilation mode")
+        print(f"        (Define CANN_SDK_AVAILABLE for full hardware support)")
+    
+    # 1. Compile orchestration functions to shared library
+    if os.path.exists(orch_dir):
+        print("\n  [1/3] Compiling orchestration functions...")
+        c_files = glob.glob(os.path.join(orch_dir, "*.c"))
+        if c_files:
+            # Compile all .c files to a shared library
+            so_path = os.path.join(orch_dir, "lib_orchestration.so")
+            
+            compile_flags = ["-O2", "-std=c11", "-fPIC", "-shared", "-D_POSIX_C_SOURCE=199309L"]
+            if CONFIG['enable_binary_expansion']:
+                compile_flags.append("-DPTO_BINARY_EXPANSION")
+            if CONFIG['enable_task_dump']:
+                compile_flags.append("-DPTO_TASK_DUMP")
+            
+            # Add CANN SDK related flags
+            if cann_available:
+                compile_flags.append("-DCANN_SDK_AVAILABLE")
+            else:
+                # Skip CANN check for stub compilation
+                compile_flags.append("-DA2A3_SKIP_CANN_CHECK")
+            
+            include_paths = [
+                f"-I{RUNTIME_DIR}",
+                f"-I{code_dir}",
+                f"-I{aic_dir}" if os.path.exists(aic_dir) else "",
+                f"-I{aiv_dir}" if os.path.exists(aiv_dir) else "",
+            ]
+            include_paths = [p for p in include_paths if p]  # Remove empty
+            
+            # Add CANN SDK include path if available
+            if cann_available:
+                include_paths.append(f"-I{ascend_home}/include")
+            
+            src_files = " ".join(c_files)
+            cmd = f"gcc {' '.join(compile_flags)} {' '.join(include_paths)} -o {so_path} {src_files} -lpthread"
+            
+            print(f"    Command: {cmd}")
+            ok, stdout, stderr = run_command(cmd, cwd=orch_dir, timeout=120)
+            
+            if ok:
+                print(f"    ✓ Compiled: {so_path}")
+            else:
+                print(f"    ✗ Failed: {stderr}")
+                success = False
+        else:
+            print("    No .c files found in orchestration/")
+    else:
+        print("\n  [1/3] Skipping orchestration (no orchestration/ directory)")
+    
+    # 2. Compile InCore AIC (AI Core Cube) functions
+    if os.path.exists(aic_dir) and ccec_available:
+        print("\n  [2/3] Compiling InCore AIC (Cube) functions...")
+        cpp_files = glob.glob(os.path.join(aic_dir, "*.cpp"))
+        if cpp_files:
+            for cpp_file in cpp_files:
+                basename = os.path.basename(cpp_file).replace('.cpp', '')
+                obj_path = os.path.join(aic_dir, f"{basename}.o")
+                
+                # Compile for AIC (Cube) architecture
+                cmd = (
+                    f"{ccec_path} -c -O3 -x cce -std=c++17 "
+                    f"--cce-aicore-only --cce-aicore-arch=dav-c220-cube "
+                    f"-D__AIC__ "
+                    f"-mllvm -cce-aicore-stack-size=0x8000 "
+                    f"-mllvm -cce-aicore-function-stack-size=0x8000 "
+                    f"-I{ROOT_DIR}/include "
+                    f"-I{code_dir} -I{aic_dir} "
+                    f"-o {obj_path} {cpp_file}"
+                )
+                
+                print(f"    Compiling {basename}.cpp for AIC...")
+                ok, stdout, stderr = run_command(cmd, cwd=aic_dir, timeout=120)
+                
+                if ok:
+                    print(f"    ✓ Compiled: {obj_path}")
+                else:
+                    print(f"    ✗ Failed: {stderr}")
+                    success = False
+        else:
+            print("    No .cpp files found in incore_aic/")
+    elif not ccec_available:
+        print("\n  [2/3] Skipping InCore AIC (ccec compiler not available)")
+    else:
+        print("\n  [2/3] Skipping InCore AIC (no incore_aic/ directory)")
+    
+    # 3. Compile InCore AIV (AI Core Vector) functions
+    if os.path.exists(aiv_dir) and ccec_available:
+        print("\n  [3/3] Compiling InCore AIV (Vector) functions...")
+        cpp_files = glob.glob(os.path.join(aiv_dir, "*.cpp"))
+        if cpp_files:
+            for cpp_file in cpp_files:
+                basename = os.path.basename(cpp_file).replace('.cpp', '')
+                obj_path = os.path.join(aiv_dir, f"{basename}.o")
+                
+                # Compile for AIV (Vector) architecture
+                cmd = (
+                    f"{ccec_path} -c -O3 -x cce -std=c++17 "
+                    f"--cce-aicore-only --cce-aicore-arch=dav-c220-vec "
+                    f"-D__AIV__ "
+                    f"-mllvm -cce-aicore-stack-size=0x8000 "
+                    f"-mllvm -cce-aicore-function-stack-size=0x8000 "
+                    f"-I{ROOT_DIR}/include "
+                    f"-I{code_dir} -I{aiv_dir} "
+                    f"-o {obj_path} {cpp_file}"
+                )
+                
+                print(f"    Compiling {basename}.cpp for AIV...")
+                ok, stdout, stderr = run_command(cmd, cwd=aiv_dir, timeout=120)
+                
+                if ok:
+                    print(f"    ✓ Compiled: {obj_path}")
+                else:
+                    print(f"    ✗ Failed: {stderr}")
+                    success = False
+        else:
+            print("    No .cpp files found in incore_aiv/")
+    elif not ccec_available:
+        print("\n  [3/3] Skipping InCore AIV (ccec compiler not available)")
+    else:
+        print("\n  [3/3] Skipping InCore AIV (no incore_aiv/ directory)")
+    
+    return success
 
 
 # =============================================================================
