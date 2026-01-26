@@ -16,6 +16,7 @@
  */
 
 #include "pto_runtime_a2a3.h"
+// Note: pto_runtime_common.h is in parent directory
 #include <time.h>
 
 // =============================================================================

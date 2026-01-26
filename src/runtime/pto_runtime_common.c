@@ -963,7 +963,7 @@ int pto_runtime_dump_stdout(PTORuntime* rt) {
 // Otherwise, heuristic estimates are used.
 
 #ifdef A2A3_CORE_SIM_AVAILABLE
-#include "ascend_a2a3_core_model/a2a3_sim_integration.h"
+#include "runtime_a2a3/core_model/a2a3_sim_integration.h"
 static bool g_core_sim_initialized = false;
 #endif
 

@@ -15,7 +15,7 @@
 #ifndef PTO_RUNTIME_A2A3_H
 #define PTO_RUNTIME_A2A3_H
 
-#include "pto_runtime_common.h"
+#include "../pto_runtime_common.h"
 
 // =============================================================================
 // A2A3 Platform Configuration

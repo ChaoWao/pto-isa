@@ -192,8 +192,8 @@ def generate_sim_header() -> str:
 // If not available, we fall back to heuristic cycle estimation
 
 #ifdef A2A3_CORE_SIM_AVAILABLE
-#include "ascend_a2a3_core_model/a2a3_core_model.h"
-#include "ascend_a2a3_core_model/a2a3_incore_sim.h"
+#include "runtime_a2a3/core_model/a2a3_core_model.h"
+#include "runtime_a2a3/core_model/a2a3_incore_sim.h"
 #endif
 
 '''

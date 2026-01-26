@@ -64,7 +64,7 @@
 #endif
 
 #ifdef PTO_PLATFORM_A2A3
-#include "pto_runtime_a2a3.c"
+#include "runtime_a2a3/pto_runtime_a2a3.c"
 #endif
 
 #endif // PTO_RUNTIME_SEPARATE_COMPILE
