@@ -59,8 +59,7 @@ int GraphExecutor::Init(KernelArgs* kargs) {
 
     DEV_INFO("GraphExecutor: Initializing");
 
-    DeviceArgs* devArgs = (DeviceArgs*)kargs->deviceArgs;
-    thread_num_ = devArgs->scheCpuNum;
+    thread_num_ = kargs->scheCpuNum;
     if (thread_num_ == 0) thread_num_ = 1;
 
     total_cores_ = kargs->core_num;
@@ -82,7 +81,7 @@ int GraphExecutor::Init(KernelArgs* kargs) {
     }
 
     // Pre-compute core assignments for each thread
-    int num_aic = devArgs->nrAic;
+    int num_aic = kargs->nrAic;
     for (int t = 0; t < thread_num_; t++) {
         // Each thread manages: 1 AIC + 2 AIV
         int aic_idx = t;

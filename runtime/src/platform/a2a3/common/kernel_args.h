@@ -23,25 +23,6 @@ extern "C" {
 #endif
 
 /**
- * DeviceArgs structure for AICPU device arguments
- *
- * This structure contains pointers to device memory for the AICPU shared object.
- * The layout is hardcoded in libaicpu_extend_kernels.so, which expects specific
- * offsets for aicpuSoBin and aicpuSoLen fields.
- */
-struct DeviceArgs {
-    uint32_t nrAic{0};
-    uint32_t nrAiv{0};
-    uint32_t nrValidAic{0};
-    uint32_t nrAicpu{0};
-    uint64_t unused1[10] = {0};
-    uint64_t aicpuSoBin{0};
-    uint64_t aicpuSoLen{0};
-    uint64_t unused2[4] = {0};
-    uint32_t scheCpuNum{0};
-};
-
-/**
  * Kernel arguments structure
  *
  * This structure is passed to both AICPU and AICore kernels by the host.
@@ -52,6 +33,8 @@ struct DeviceArgs {
  * - hankArgs: Written by host, read/written by AICPU and AICore (handshake array)
  * - core_num: Written by host, read by AICPU (number of AICore instances)
  * - graphArgs: Written by host, read by AICPU (task graph structure)
+ * - nrAic: Written by host, read by AICPU (number of AIC cores)
+ * - scheCpuNum: Written by host, read by AICPU (number of AICPU scheduling threads)
  *
  * Note: AICore kernels receive handshake buffers directly, not this structure.
  */
@@ -62,6 +45,8 @@ struct KernelArgs {
     int64_t core_num;                // Number of AICore instances
     int64_t *hankArgs{nullptr};      // Handshake buffer array (shared AICPU/AICore)
     Graph *graphArgs{nullptr};       // Task graph in device memory (AICPU reads)
+    int32_t nrAic;                   // Number of AIC cores
+    int32_t scheCpuNum;              // Number of AICPU scheduling threads
 };
 
 #ifdef __cplusplus

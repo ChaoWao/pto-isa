@@ -119,7 +119,6 @@ def main():
     # AICPU threading configuration
     aicpu_thread_num = 3       # Number of AICPU scheduler threads (1-4)
     blockdim_per_thread = 1    # Number of blockdim per thread
-    cores_per_blockdim = 3     # Number of cores per blockdim
 
     pto_isa_root = "/data/wcwxy/workspace/pypto/pto-isa"
 
@@ -131,7 +130,7 @@ def main():
     # Initialize DeviceRunner
     print("\n=== Initializing DeviceRunner ===")
     runner = DeviceRunner()
-    runner.init(device_id, aicpu_thread_num, blockdim_per_thread, aicpu_binary, aicore_binary, pto_isa_root)
+    runner.init(device_id, aicpu_binary, aicore_binary, pto_isa_root)
 
     # Create and initialize graph
     # C++ handles: allocate Graph, allocate tensors, build tasks, initialize data
@@ -142,8 +141,8 @@ def main():
     # Execute graph on device
     # Python now controls when the graph is executed
     print("\n=== Executing Graph on Device ===")
-    aicore_num = aicpu_thread_num * blockdim_per_thread * cores_per_blockdim
-    runner.run(graph, num_cores=aicore_num, launch_aicpu_num=aicpu_thread_num)
+    runner.run(graph, aicpu_thread_num, blockdim_per_thread, cores_per_blockdim = 3,
+               launch_aicpu_num=aicpu_thread_num)
 
     # Validate results and cleanup
     # C++ handles: copy results from device, validate, free tensors, delete graph

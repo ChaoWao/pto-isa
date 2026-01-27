@@ -133,19 +133,16 @@ DeviceRunner &DeviceRunner::Get() {
     return runner;
 }
 
-int DeviceRunner::Init(int deviceId, int aicpuThreadNum, int blockdimPerThread,
+int DeviceRunner::Init(int deviceId,
                        const std::vector<uint8_t>& aicpuSoBinary,
-                       const std::vector<uint8_t>& aicoreKernelBinary, const std::string& ptoIsaRoot) {
+                       const std::vector<uint8_t>& aicoreKernelBinary,
+                       const std::string& ptoIsaRoot) {
     if (initialized_) {
         std::cerr << "Error: DeviceRunner already initialized\n";
         return -1;
     }
 
     deviceId_ = deviceId;
-    aicpuThreadNum_ = aicpuThreadNum;
-    blockdimPerThread_ = blockdimPerThread;
-    blockDim_ = blockdimPerThread_ * aicpuThreadNum_;
-    numCores_ = aicpuThreadNum_ * blockdimPerThread_ * coresPerBlockdim_;
     aicoreKernelBinary_ = aicoreKernelBinary;
     ptoIsaRoot_ = ptoIsaRoot;
 
@@ -192,11 +189,6 @@ int DeviceRunner::Init(int deviceId, int aicpuThreadNum, int blockdimPerThread,
     // Initialize device args
     deviceArgs_.aicpuSoBin = soInfo_.aicpuSoBin;
     deviceArgs_.aicpuSoLen = soInfo_.aicpuSoLen;
-    deviceArgs_.nrAic = aicpuThreadNum_ * blockdimPerThread_;
-    deviceArgs_.nrAiv = aicpuThreadNum_ * blockdimPerThread_ * 2;
-    deviceArgs_.nrValidAic = aicpuThreadNum_ * blockdimPerThread_;
-    deviceArgs_.nrAicpu = aicpuThreadNum_;
-    deviceArgs_.scheCpuNum = aicpuThreadNum_;
     rc = kernelArgs_.InitDeviceArgs(deviceArgs_, memAlloc_);
     if (rc != 0) {
         std::cerr << "Error: InitDeviceArgs failed: " << rc << '\n';
@@ -209,7 +201,7 @@ int DeviceRunner::Init(int deviceId, int aicpuThreadNum, int blockdimPerThread,
     }
 
     // Initialize handshake buffers
-    // NOTE: Moved to Run() to initialize per Graph instance with numCores parameter
+    // NOTE: Moved to Run() to initialize per Graph instance with execution parameters
 
     // NOTE: Kernel registration and loading moved to runtime compilation
     // Users should call Init() with ptoIsaRoot, then compile kernels:
@@ -255,11 +247,20 @@ int DeviceRunner::CopyFromDevice(void* hostPtr, const void* devPtr, size_t bytes
     return rtMemcpy(hostPtr, bytes, devPtr, bytes, RT_MEMCPY_DEVICE_TO_HOST);
 }
 
-int DeviceRunner::Run(Graph& graph, int numCores, int launchAicpuNum) {
+int DeviceRunner::Run(Graph& graph, int aicpuThreadNum, int blockdimPerThread,
+                      int coresPerBlockdim, int launchAicpuNum) {
     if (!initialized_) {
         std::cerr << "Error: DeviceRunner not initialized\n";
         return -1;
     }
+
+    // Calculate execution parameters
+    int numCores = aicpuThreadNum * blockdimPerThread * coresPerBlockdim;
+    blockDim_ = aicpuThreadNum * blockdimPerThread;
+
+    // Set kernel args
+    kernelArgs_.args.nrAic = aicpuThreadNum * blockdimPerThread;
+    kernelArgs_.args.scheCpuNum = aicpuThreadNum;
 
     // Initialize handshake buffers in graph
     if (numCores > GRAPH_MAX_WORKER) {
@@ -269,8 +270,8 @@ int DeviceRunner::Run(Graph& graph, int numCores, int launchAicpuNum) {
 
     graph.worker_count = numCores;
 
-    // Calculate number of AIC cores (1/3 of total)
-    int numAic = (numCores + 2) / 3;  // Round up for 1/3
+    // Calculate number of AIC cores
+    int numAic = (numCores + coresPerBlockdim - 1) / coresPerBlockdim;
 
     for (int i = 0; i < numCores; i++) {
         graph.workers[i].aicpu_ready = 0;

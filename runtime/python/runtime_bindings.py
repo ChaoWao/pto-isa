@@ -9,12 +9,12 @@ Usage:
 
     DeviceRunner, Graph = load_runtime("/path/to/libpto_runtime.so")
     runner = DeviceRunner()
-    runner.init(device_id=0, aicpu_thread_num=1, blockdim_per_thread=1, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
+    runner.init(device_id=0, aicpu_binary=aicpu_bytes, aicore_binary=aicore_bytes, pto_isa_root="/path/to/pto-isa")
 
     graph = Graph()
     graph.initialize()
 
-    runner.run(graph, num_cores=3, launch_aicpu_num=1)
+    runner.run(graph, aicpu_thread_num=3, blockdim_per_thread=1, cores_per_blockdim=3, launch_aicpu_num=3)
     runner.print_handshake_results(graph)
     graph.validate_and_cleanup()
     runner.finalize()
@@ -71,13 +71,13 @@ class RuntimeLibraryLoader:
         self.lib.ValidateGraph.restype = c_int
 
         # DeviceRunner functions
-        self.lib.DeviceRunner_Init.argtypes = [c_int, c_int, c_int,
+        self.lib.DeviceRunner_Init.argtypes = [c_int,
                                                POINTER(c_uint8), c_size_t,
                                                POINTER(c_uint8), c_size_t,
                                                c_char_p]
         self.lib.DeviceRunner_Init.restype = c_int
 
-        self.lib.DeviceRunner_Run.argtypes = [c_void_p, c_int, c_int]
+        self.lib.DeviceRunner_Run.argtypes = [c_void_p, c_int, c_int, c_int, c_int]
         self.lib.DeviceRunner_Run.restype = c_int
 
         self.lib.DeviceRunner_PrintHandshakeResults.argtypes = [c_void_p]
@@ -172,8 +172,6 @@ class DeviceRunner:
     def init(
         self,
         device_id: int,
-        aicpu_thread_num: int,
-        blockdim_per_thread: int,
         aicpu_binary: bytes,
         aicore_binary: bytes,
         pto_isa_root: str,
@@ -183,8 +181,6 @@ class DeviceRunner:
 
         Args:
             device_id: Device ID (0-15)
-            aicpu_thread_num: Number of AICPU scheduling threads (1-4)
-            blockdim_per_thread: Number of blockdim per thread
             aicpu_binary: Binary data of AICPU shared object
             aicore_binary: Binary data of AICore kernel
             pto_isa_root: Path to PTO-ISA root directory (headers location)
@@ -198,8 +194,6 @@ class DeviceRunner:
 
         rc = self.lib.DeviceRunner_Init(
             device_id,
-            aicpu_thread_num,
-            blockdim_per_thread,
             aicpu_array,
             len(aicpu_binary),
             aicore_array,
@@ -210,13 +204,16 @@ class DeviceRunner:
             raise RuntimeError(f"DeviceRunner_Init failed: {rc}")
         self._initialized = True
 
-    def run(self, graph: "Graph", num_cores: int, launch_aicpu_num: int = 1) -> None:
+    def run(self, graph: "Graph", aicpu_thread_num: int, blockdim_per_thread: int,
+            cores_per_blockdim: int, launch_aicpu_num: int = 1) -> None:
         """
         Execute a graph on the device.
 
         Args:
             graph: Graph to execute (must have been initialized via graph.initialize())
-            num_cores: Number of cores for handshake (e.g., 3 for 1c2v)
+            aicpu_thread_num: Number of AICPU scheduling threads (1-4)
+            blockdim_per_thread: Number of blockdim per thread
+            cores_per_blockdim: Number of cores per blockdim (e.g., 3 for 1c2v)
             launch_aicpu_num: Number of AICPU instances
 
         Raises:
@@ -227,7 +224,8 @@ class DeviceRunner:
 
         # Get the actual Graph* pointer from the buffer
         graph_ptr = ctypes.cast(graph._buffer, ctypes.POINTER(c_void_p)).contents
-        rc = self.lib.DeviceRunner_Run(graph_ptr, num_cores, launch_aicpu_num)
+        rc = self.lib.DeviceRunner_Run(graph_ptr, aicpu_thread_num, blockdim_per_thread,
+                                       cores_per_blockdim, launch_aicpu_num)
         if rc != 0:
             raise RuntimeError(f"DeviceRunner_Run failed: {rc}")
 

@@ -65,8 +65,6 @@ int ValidateGraph(GraphHandle graph);
  * Uses the DeviceRunner singleton internally.
  *
  * @param device_id              Device ID (0-15)
- * @param aicpu_thread_num       Number of AICPU scheduling threads (1-4)
- * @param blockdim_per_thread    Number of blockdim per thread
  * @param aicpu_binary           Binary data of AICPU shared object
  * @param aicpu_size             Size of AICPU binary in bytes
  * @param aicore_binary          Binary data of AICore kernel
@@ -74,7 +72,7 @@ int ValidateGraph(GraphHandle graph);
  * @param pto_isa_root           Path to PTO-ISA root directory (headers location)
  * @return 0 on success, error code on failure
  */
-int DeviceRunner_Init(int device_id, int aicpu_thread_num, int blockdim_per_thread,
+int DeviceRunner_Init(int device_id,
                       const uint8_t* aicpu_binary, size_t aicpu_size,
                       const uint8_t* aicore_binary, size_t aicore_size,
                       const char* pto_isa_root);
@@ -84,12 +82,15 @@ int DeviceRunner_Init(int device_id, int aicpu_thread_num, int blockdim_per_thre
  *
  * Uses the DeviceRunner singleton internally.
  *
- * @param graph            Graph handle to execute
- * @param num_cores        Number of cores for handshake (e.g., 3 for 1c2v)
- * @param launch_aicpu_num Number of AICPU instances to launch (default 1)
+ * @param graph              Graph handle to execute
+ * @param aicpu_thread_num   Number of AICPU scheduling threads (1-4)
+ * @param blockdim_per_thread Number of blockdim per thread
+ * @param cores_per_blockdim  Number of cores per blockdim (e.g., 3 for 1c2v)
+ * @param launch_aicpu_num   Number of AICPU instances to launch (default 1)
  * @return 0 on success, error code on failure
  */
-int DeviceRunner_Run(GraphHandle graph, int num_cores, int launch_aicpu_num);
+int DeviceRunner_Run(GraphHandle graph, int aicpu_thread_num, int blockdim_per_thread,
+                     int cores_per_blockdim, int launch_aicpu_num);
 
 /**
  * Print handshake results from device.
