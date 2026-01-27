@@ -440,6 +440,8 @@ int main(int argc, char** argv) {
     config.orchestration_func_name = """ + '"' + example_name + """_dynamic";  // Orchestration function name
     config.incore_aiv_dir = "generated_code/incore_aiv/";
     config.incore_aic_dir = "generated_code/incore_aic/";
+    config.aicore_kernel_path = "generated_code/aicore_kernel.o";
+    config.aicpu_kernel_path = "generated_code/libaicpu_kernel.so";
     
     // Thread configuration (as specified in requirements)
     config.num_orch_threads = 1;    // 1 Orchestration AICPU thread
@@ -702,10 +704,13 @@ def compile_ascend_a2a3(code_dir):
     aic_dir = os.path.join(code_dir, "incore_aic")
     aiv_dir = os.path.join(code_dir, "incore_aiv")
     
-    # Check if CANN SDK is available
-    cann_available = os.path.exists(os.path.join(ascend_home, 'include', 'acl', 'acl.h'))
+    # Check if CANN SDK is available (need both acl.h and runtime/rt.h for full device support)
+    acl_available = os.path.exists(os.path.join(ascend_home, 'include', 'acl', 'acl.h'))
+    runtime_available = os.path.exists(os.path.join(ascend_home, 'pkg_inc', 'runtime', 'runtime', 'rt.h'))
+    cann_available = acl_available and runtime_available
     if not cann_available:
         print(f"  Note: CANN SDK not found, using stub compilation mode")
+        print(f"        (acl.h: {acl_available}, runtime/rt.h: {runtime_available})")
         print(f"        (Define CANN_SDK_AVAILABLE for full hardware support)")
     
     # 1. Compile orchestration functions to shared library
@@ -845,9 +850,12 @@ def compile_ascend_a2a3(code_dir):
         
         # Compile aicore_kernel.cpp for both AIC and AIV
         aicore_flags = (
-            f"-c -O3 -x cce -std=c++17 --cce-aicore-only "
+            f"-c -O3 -g -x cce -Wall -std=c++17 --cce-aicore-only "
             f"-mllvm -cce-aicore-stack-size=0x8000 "
             f"-mllvm -cce-aicore-function-stack-size=0x8000 "
+            f"-mllvm -cce-aicore-record-overflow=false "
+            f"-mllvm -cce-aicore-addr-transform "
+            f"-mllvm -cce-aicore-dcci-insert-for-scalar=false "
             f"-I{common_dir} -I{code_dir}"
         )
         
@@ -872,7 +880,9 @@ def compile_ascend_a2a3(code_dir):
             success = False
         
         # Link all objects into aicore_kernel.o
-        all_objs = [aic_kernel_obj, aiv_kernel_obj] + aic_objs + aiv_objs
+        # NOTE: Only link the kernel entry point (aicore_kernel_*.o), NOT InCore function objects.
+        # InCore functions are loaded separately by the binary loader.
+        all_objs = [aic_kernel_obj, aiv_kernel_obj]
         aicore_kernel_out = os.path.join(code_dir, "aicore_kernel.o")
         if all_objs:
             cmd = f"{ld_path} -m aicorelinux -Ttext=0 -static -n -o {aicore_kernel_out} {' '.join(all_objs)}"
@@ -950,9 +960,16 @@ def compile_ascend_a2a3(code_dir):
         f"-I{common_dir}",
     ]
     
-    # Add CANN SDK include path if available
+    # Add CANN SDK include paths if available (following ref_runtime/CMakeLists.txt pattern)
     if cann_available:
-        include_paths.append(f"-I{ascend_home}/include")
+        include_paths.extend([
+            f"-I{ascend_home}/include",
+            f"-I{ascend_home}/include/experiment/runtime",
+            f"-I{ascend_home}/include/experiment/msprof",
+            f"-I{ascend_home}/pkg_inc",
+            f"-I{ascend_home}/pkg_inc/runtime",
+            f"-I{ascend_home}/pkg_inc/profiling",
+        ])
     
     # Find all runtime source files needed (host-side only)
     # Note: a2a3_core_worker.c is included for stub mode (CPU simulation)
@@ -974,9 +991,13 @@ def compile_ascend_a2a3(code_dir):
         # Build link flags
         link_flags = ["-lpthread", "-ldl"]
         if cann_available:
-            # Add ACL runtime library when CANN SDK is available
-            link_flags.append(f"-L{ascend_home}/lib64")
-            link_flags.append("-lascendcl")
+            # Add ACL runtime library when CANN SDK is available (following ref_runtime pattern)
+            link_flags.extend([
+                f"-L{ascend_home}/lib64",
+                f"-L{ascend_home}/runtime/lib64",
+                "-lruntime",
+                "-lascendcl",
+            ])
         
         cmd = (
             f"gcc {' '.join(compile_flags)} {' '.join(include_paths)} "

@@ -100,7 +100,7 @@ static void execute_task(__gm__ PTOTask* task) {
  * 
  * @param hank Array of handshake buffers (one per core)
  */
-extern "C" __global__ __aicore__ void KERNEL_ENTRY(pto_aicore_kernel)(__gm__ PTOHandshake* hank) {
+extern "C" __global__ __aicore__ void KERNEL_ENTRY(aicore_kernel)(__gm__ PTOHandshake* hank) {
     // Calculate blockIdx for this core
 #ifdef __AIV__
     // AIV cores are indexed after AIC cores
