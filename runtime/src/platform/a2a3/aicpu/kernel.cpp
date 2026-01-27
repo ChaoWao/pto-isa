@@ -29,7 +29,7 @@ struct MultiThreadManager {
 
     int Init(KernelArgs* kargs) {
         bool expected = false;
-        if (!initialized_.compare_exchange_strong(expected, true, std::memory_order_seq_cst)) {
+        if (!initialized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
             return 0;
         }
 
