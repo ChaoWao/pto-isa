@@ -46,7 +46,7 @@ int ValidateGraph(GraphHandle graph) {
 /* DeviceRunner API Implementation */
 /* =========================================================================== */
 
-int DeviceRunner_Init(int device_id,
+int DeviceRunner_Init(int device_id, int aicpu_thread_num, int blockdim_per_thread,
                       const uint8_t* aicpu_binary, size_t aicpu_size,
                       const uint8_t* aicore_binary, size_t aicore_size,
                       const char* pto_isa_root) {
@@ -58,7 +58,7 @@ int DeviceRunner_Init(int device_id,
         DeviceRunner& runner = DeviceRunner::Get();
         std::vector<uint8_t> aicpuVec(aicpu_binary, aicpu_binary + aicpu_size);
         std::vector<uint8_t> aicoreVec(aicore_binary, aicore_binary + aicore_size);
-        return runner.Init(device_id, aicpuVec, aicoreVec, std::string(pto_isa_root));
+        return runner.Init(device_id, aicpu_thread_num, blockdim_per_thread, aicpuVec, aicoreVec, std::string(pto_isa_root));
     } catch (...) {
         return -1;
     }
