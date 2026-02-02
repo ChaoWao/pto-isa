@@ -268,15 +268,6 @@ bool pto2_scheduler_init(PTO2SchedulerState* sched,
         return false;
     }
     
-    // Allocate per-slot locks (all initialized to 0 = unlocked)
-    sched->slot_locks = (volatile int32_t*)calloc(window_size, sizeof(int32_t));
-    if (!sched->slot_locks) {
-        free(sched->fanout_refcount);
-        free(sched->fanin_refcount);
-        free(sched->task_state);
-        return false;
-    }
-    
     // Initialize ready queues
     for (int i = 0; i < PTO2_NUM_WORKER_TYPES; i++) {
         if (!pto2_ready_queue_init(&sched->ready_queues[i], PTO2_READY_QUEUE_SIZE)) {
@@ -284,7 +275,6 @@ bool pto2_scheduler_init(PTO2SchedulerState* sched,
             for (int j = 0; j < i; j++) {
                 pto2_ready_queue_destroy(&sched->ready_queues[j]);
             }
-            free((void*)sched->slot_locks);
             free(sched->fanout_refcount);
             free(sched->fanin_refcount);
             free(sched->task_state);
@@ -309,11 +299,6 @@ void pto2_scheduler_destroy(PTO2SchedulerState* sched) {
     if (sched->fanout_refcount) {
         free(sched->fanout_refcount);
         sched->fanout_refcount = NULL;
-    }
-    
-    if (sched->slot_locks) {
-        free((void*)sched->slot_locks);
-        sched->slot_locks = NULL;
     }
     
     for (int i = 0; i < PTO2_NUM_WORKER_TYPES; i++) {

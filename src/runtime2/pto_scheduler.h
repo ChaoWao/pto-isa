@@ -67,10 +67,6 @@ typedef struct PTO2SchedulerState {
     int32_t* fanin_refcount;          // Dynamic: counts completed producers
     int32_t* fanout_refcount;         // Dynamic: counts released references
     
-    // Per-slot locks for synchronization between orchestrator (fanin/fanout setup)
-    // and scheduler (task completion handling)
-    volatile int32_t* slot_locks;     // Spinlock per slot (0=unlocked, 1=locked)
-    
     // Ready queues (one per worker type)
     PTO2ReadyQueue ready_queues[PTO2_NUM_WORKER_TYPES];
     
@@ -90,27 +86,6 @@ typedef struct PTO2SchedulerState {
  */
 static inline int32_t pto2_task_slot(PTO2SchedulerState* sched, int32_t task_id) {
     return task_id & sched->task_window_mask;
-}
-
-/**
- * Lock a task slot (spinlock)
- * Used to synchronize between orchestrator (fanin/fanout setup) and scheduler (task completion)
- */
-static inline void pto2_slot_lock(PTO2SchedulerState* sched, int32_t slot) {
-    while (__atomic_exchange_n(&sched->slot_locks[slot], 1, __ATOMIC_ACQUIRE) != 0) {
-        // Spin until we acquire the lock
-        while (__atomic_load_n(&sched->slot_locks[slot], __ATOMIC_RELAXED) != 0) {
-            // Reduce contention by waiting for unlock before trying again
-            PTO2_SPIN_PAUSE();
-        }
-    }
-}
-
-/**
- * Unlock a task slot
- */
-static inline void pto2_slot_unlock(PTO2SchedulerState* sched, int32_t slot) {
-    __atomic_store_n(&sched->slot_locks[slot], 0, __ATOMIC_RELEASE);
 }
 
 // =============================================================================
