@@ -2,165 +2,132 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Union
-from toolchain import AICoreToolchain, AICPUToolchain, HostToolchain
+from typing import List
+from toolchain import AICoreToolchain, AICPUToolchain, HostToolchain, HostSimToolchain
 
 
 class BinaryCompiler:
     """
     Binary compiler for compiling binaries for multiple target platforms.
-    Singleton pattern - only one instance needed.
+    Singleton-per-platform pattern - one instance cached per platform string.
 
-    Supports three platforms:
-    1. aicore - AICore accelerator kernels (Bisheng CCE)
-    2. aicpu - AICPU device task scheduler (aarch64 cross-compiler)
-    3. host - Host executables (standard C/C++ compiler)
+    Supports three target types:
+    1. aicore - AICore accelerator kernels
+    2. aicpu - AICPU device task scheduler
+    3. host - Host runtime library
+
+    Platform determines which toolchains and CMake directories are used:
+    - "a2a3": ccec for aicore, aarch64 cross-compiler for aicpu, gcc for host
+    - "a2a3sim": all use host gcc/g++ (builds host-compatible .so files)
     """
-    _instance = None
-    _initialized = False
+    _instances = {}
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(BinaryCompiler, cls).__new__(cls)
-        return cls._instance
+    def __new__(cls, platform: str = "a2a3"):
+        if platform not in cls._instances:
+            instance = super(BinaryCompiler, cls).__new__(cls)
+            instance._initialized = False
+            cls._instances[platform] = instance
+        return cls._instances[platform]
 
-    def __init__(self):
-        if not BinaryCompiler._initialized:
-            self.ascend_home_path = os.getenv("ASCEND_HOME_PATH")
-            if not self.ascend_home_path:
-                raise EnvironmentError(
-                    "ASCEND_HOME_PATH environment variable is not set. "
-                    "Please `source /usr/local/Ascend/ascend-toolkit/latest/bin/setenv.bash`."
-                )
-            self.aicore_toolchain = self._gen_aicore_toolchain()
-            self.aicpu_toolchain = self._gen_aicpu_toolchain()
-            self.host_toolchain = self._gen_host_toolchain()
-            BinaryCompiler._initialized = True
+    def __init__(self, platform: str = "a2a3"):
+        if self._initialized:
+            return
+        self.platform = platform
+        self.project_root = Path(__file__).parent.parent
+        self.platform_dir = self.project_root / "src" / "platform" / platform
 
-    def _gen_aicore_toolchain(self) -> AICoreToolchain:
-        """
-        Create AICore toolchain from ASCEND_HOME_PATH environment variable.
-
-        Returns:
-            AICoreToolchain instance
-
-        Raises:
-            EnvironmentError: If ASCEND_HOME_PATH is not set
-            FileNotFoundError: If compiler or linker not found
-        """
-        def _find_first(paths: List[str]) -> str:
-            for p in paths:
-                if os.path.isfile(p):
-                    return p
-            return ""
-
-        # CANN installs vary: some expose `bin/ccec`, others put it under
-        # `compiler/ccec_compiler/bin/`. Prefer `ccec`/`ld.lld` but fall back
-        # to the underlying tool names where needed.
-        cc_path = _find_first([
-            os.path.join(self.ascend_home_path, "bin", "ccec"),
-            os.path.join(self.ascend_home_path, "compiler", "ccec_compiler", "bin", "ccec"),
-            os.path.join(self.ascend_home_path, "aarch64-linux", "ccec_compiler", "bin", "ccec"),
-            os.path.join(self.ascend_home_path, "compiler", "ccec_compiler", "bin", "bisheng"),
-        ])
-        ld_path = _find_first([
-            os.path.join(self.ascend_home_path, "bin", "ld.lld"),
-            os.path.join(self.ascend_home_path, "compiler", "ccec_compiler", "bin", "ld.lld"),
-            os.path.join(self.ascend_home_path, "aarch64-linux", "ccec_compiler", "bin", "ld.lld"),
-            os.path.join(self.ascend_home_path, "compiler", "ccec_compiler", "bin", "lld"),
-        ])
-
-        if not cc_path:
-            raise FileNotFoundError(
-                "AICore compiler not found under ASCEND_HOME_PATH. Tried: "
-                f"{self.ascend_home_path}/bin/ccec and compiler/ccec_compiler/bin/ccec"
-            )
-        if not ld_path:
-            raise FileNotFoundError(
-                "AICore linker not found under ASCEND_HOME_PATH. Tried: "
-                f"{self.ascend_home_path}/bin/ld.lld and compiler/ccec_compiler/bin/ld.lld"
+        if not self.platform_dir.is_dir():
+            raise ValueError(
+                f"Platform '{platform}' not found at {self.platform_dir}"
             )
 
-        aicore_dir = Path(__file__).parent.parent / "src" / "platform" / "a2a3" / "aicore"
-
-        return AICoreToolchain(cc=cc_path, ld=ld_path, aicore_dir=str(aicore_dir))
-
-    def _gen_aicpu_toolchain(self) -> AICPUToolchain:
-        """
-        Create AICPU toolchain from ASCEND_HOME_PATH environment variable.
-        Derives cross-compiler paths from ASCEND_HOME_PATH.
-
-        Returns:
-            AICPUToolchain instance
-
-        Raises:
-            EnvironmentError: If ASCEND_HOME_PATH is not set
-            FileNotFoundError: If cross-compiler not found
-        """
-        # Some CANN installs ship `tools/hcc/...` cross-compilers; others rely on
-        # system toolchains. Fall back to system aarch64 toolchains if needed.
-        cc_candidates = [
-            os.path.join(self.ascend_home_path, "tools", "hcc", "bin", "aarch64-target-linux-gnu-gcc"),
-            "aarch64-linux-gnu-gcc",
-            "gcc",
-        ]
-        cxx_candidates = [
-            os.path.join(self.ascend_home_path, "tools", "hcc", "bin", "aarch64-target-linux-gnu-g++"),
-            "aarch64-linux-gnu-g++",
-            "g++",
-        ]
-
-        cc_path = next((p for p in cc_candidates if self._find_executable(p)), "")
-        cxx_path = next((p for p in cxx_candidates if self._find_executable(p)), "")
-        if not cc_path:
-            raise FileNotFoundError(
-                "AICPU C compiler not found. Tried: "
-                + ", ".join(cc_candidates)
+        if platform == "a2a3":
+            self._init_a2a3()
+        elif platform == "a2a3sim":
+            self._init_a2a3sim()
+        else:
+            raise ValueError(
+                f"Unknown platform: {platform}. Supported: a2a3, a2a3sim"
             )
-        if not cxx_path:
-            raise FileNotFoundError(
-                "AICPU C++ compiler not found. Tried: "
-                + ", ".join(cxx_candidates)
+        self._initialized = True
+
+    def _init_a2a3(self):
+        """Initialize toolchains for real a2a3 hardware."""
+        self.ascend_home_path = os.environ.get("ASCEND_HOME_PATH")
+        if self.ascend_home_path is None:
+            raise EnvironmentError(
+                "ASCEND_HOME_PATH environment variable not set. "
+                "Please set it to your Ascend toolkit installation path, "
+                "or use platform='a2a3sim' for simulation."
             )
 
-        aicpu_dir = Path(__file__).parent.parent / "src" / "platform" / "a2a3" / "aicpu"
+        # AICore: Bisheng CCE compiler
+        cc_path = os.path.join(self.ascend_home_path, "bin", "ccec")
+        ld_path = os.path.join(self.ascend_home_path, "bin", "ld.lld")
+        if not os.path.isfile(cc_path):
+            raise FileNotFoundError(f"Compiler not found: {cc_path}")
+        if not os.path.isfile(ld_path):
+            raise FileNotFoundError(f"Linker not found: {ld_path}")
+        self.aicore_toolchain = AICoreToolchain(
+            cc=cc_path, ld=ld_path,
+            aicore_dir=str(self.platform_dir / "aicore")
+        )
 
-        return AICPUToolchain(cc=cc_path, cxx=cxx_path, aicpu_dir=str(aicpu_dir), ascend_home_path=self.ascend_home_path)
+        # AICPU: aarch64 cross-compiler
+        cc_path = os.path.join(self.ascend_home_path, "tools", "hcc", "bin", "aarch64-target-linux-gnu-gcc")
+        cxx_path = os.path.join(self.ascend_home_path, "tools", "hcc", "bin", "aarch64-target-linux-gnu-g++")
+        if not os.path.isfile(cc_path):
+            raise FileNotFoundError(f"AICPU C compiler not found: {cc_path}")
+        if not os.path.isfile(cxx_path):
+            raise FileNotFoundError(f"AICPU C++ compiler not found: {cxx_path}")
+        self.aicpu_toolchain = AICPUToolchain(
+            cc=cc_path, cxx=cxx_path,
+            aicpu_dir=str(self.platform_dir / "aicpu"),
+            ascend_home_path=self.ascend_home_path
+        )
 
-    def _gen_host_toolchain(self) -> HostToolchain:
+        # Host: standard gcc/g++
+        self._ensure_host_compilers()
+        self.host_toolchain = HostToolchain(
+            cc="gcc", cxx="g++",
+            host_dir=str(self.platform_dir / "host"),
+            ascend_home_path=self.ascend_home_path
+        )
+
+    def _init_a2a3sim(self):
+        """Initialize toolchains for simulation platform.
+        All targets use host gcc/g++ with platform-specific CMake dirs.
+        No Ascend SDK required.
         """
-        Create Host toolchain from standard compilers.
+        self._ensure_host_compilers()
 
-        Returns:
-            HostToolchain instance
+        # All three targets use HostSimToolchain (no ascend_home_path needed)
+        self.aicore_toolchain = HostSimToolchain(
+            cc="gcc", cxx="g++",
+            host_dir=str(self.platform_dir / "aicore"),
+            binary_name="libaicore_kernel.so",
+        )
+        self.aicpu_toolchain = HostSimToolchain(
+            cc="gcc", cxx="g++",
+            host_dir=str(self.platform_dir / "aicpu"),
+            binary_name="libaicpu_kernel.so",
+        )
+        self.host_toolchain = HostSimToolchain(
+            cc="gcc", cxx="g++",
+            host_dir=str(self.platform_dir / "host"),
+        )
 
-        Raises:
-            FileNotFoundError: If standard compilers not found
-        """
-        cc_path = "gcc"
-        cxx_path = "g++"
-
-        if not self._find_executable(cc_path):
-            raise FileNotFoundError(
-                f"Host C compiler not found: {cc_path}. "
-                "Please install gcc."
-            )
-        if not self._find_executable(cxx_path):
-            raise FileNotFoundError(
-                f"Host C++ compiler not found: {cxx_path}. "
-                "Please install g++."
-            )
-
-        host_dir = Path(__file__).parent.parent / "src" / "platform" / "a2a3" / "host"
-
-        return HostToolchain(cc=cc_path, cxx=cxx_path, host_dir=str(host_dir), ascend_home_path=self.ascend_home_path)
+    def _ensure_host_compilers(self):
+        if not self._find_executable("gcc"):
+            raise FileNotFoundError("Host C compiler not found: gcc. Please install gcc.")
+        if not self._find_executable("g++"):
+            raise FileNotFoundError("Host C++ compiler not found: g++. Please install g++.")
 
     @staticmethod
     def _find_executable(name: str) -> bool:
         """Check if an executable exists (either as absolute path or in PATH)."""
         if os.path.isfile(name) and os.access(name, os.X_OK):
             return True
-        # Check if it's in PATH
         result = subprocess.run(
             ["which", name],
             capture_output=True,
@@ -172,7 +139,7 @@ class BinaryCompiler:
         self,
         target_platform: str,
         include_dirs: List[str],
-        source_dirs: List[str]
+        source_dirs: List[str],
     ) -> bytes:
         """
         Compile binary for the specified target platform.
@@ -183,7 +150,7 @@ class BinaryCompiler:
             source_dirs: List of source directory paths
 
         Returns:
-            Compiled binary data as bytes for all platforms
+            Compiled binary data as bytes
 
         Raises:
             ValueError: If target platform is invalid
@@ -191,59 +158,24 @@ class BinaryCompiler:
             FileNotFoundError: If output binary not found
         """
         if target_platform == "aicore":
-            return self._compile_aicore(include_dirs, source_dirs)
+            toolchain = self.aicore_toolchain
         elif target_platform == "aicpu":
-            return self._compile_aicpu(include_dirs, source_dirs)
+            toolchain = self.aicpu_toolchain
         elif target_platform == "host":
-            return self._compile_host(include_dirs, source_dirs)
+            toolchain = self.host_toolchain
         else:
             raise ValueError(
                 f"Invalid target platform: {target_platform}. "
                 "Must be 'aicore', 'aicpu', or 'host'."
             )
 
-    def _compile_aicore(self, include_dirs: List[str], source_dirs: List[str]) -> bytes:
-        """Compile AICore kernel."""
-        toolchain = self.aicore_toolchain
         cmake_args = toolchain.gen_cmake_args(include_dirs, source_dirs)
         cmake_source_dir = toolchain.get_root_dir()
         binary_name = toolchain.get_binary_name()
 
         return self._run_compilation(
-            cmake_source_dir, cmake_args, binary_name, platform="AICore"
+            cmake_source_dir, cmake_args, binary_name, platform=target_platform.upper()
         )
-
-    def _compile_aicpu(self, include_dirs: List[str], source_dirs: List[str]) -> bytes:
-        """Compile AICPU kernel."""
-        toolchain = self.aicpu_toolchain
-        cmake_args = toolchain.gen_cmake_args(include_dirs, source_dirs)
-        cmake_source_dir = toolchain.get_root_dir()
-        binary_name = toolchain.get_binary_name()
-
-        return self._run_compilation(
-            cmake_source_dir, cmake_args, binary_name, platform="AICPU"
-        )
-
-    def _compile_host(
-        self,
-        include_dirs: List[str],
-        source_dirs: List[str],
-    ) -> bytes:
-        """Compile host executable.
-
-        Returns:
-            Compiled binary data as bytes
-        """
-        toolchain = self.host_toolchain
-        cmake_args = toolchain.gen_cmake_args(include_dirs, source_dirs)
-        cmake_source_dir = toolchain.get_root_dir()
-        output_binary_name = toolchain.get_binary_name()
-
-        binary_data = self._run_compilation(
-            cmake_source_dir, cmake_args, output_binary_name, platform="Host"
-        )
-
-        return binary_data
 
     def _run_compilation(
         self,
@@ -272,7 +204,6 @@ class BinaryCompiler:
             # Run CMake configuration
             cmake_cmd = ["cmake", cmake_source_dir] + cmake_args.split()
 
-            # Print CMake command
             print(f"\n{'='*80}")
             print(f"[{platform}] CMake Command:")
             print(f"  Working directory: {build_dir}")
@@ -288,7 +219,6 @@ class BinaryCompiler:
                     text=True
                 )
 
-                # Print CMake output
                 if result.stdout:
                     print(f"[{platform}] CMake stdout:")
                     print(result.stdout)
@@ -306,7 +236,6 @@ class BinaryCompiler:
             # Run Make to build
             make_cmd = ["make", "VERBOSE=1"]
 
-            # Print Make command
             print(f"\n{'='*80}")
             print(f"[{platform}] Make Command:")
             print(f"  Working directory: {build_dir}")
@@ -322,7 +251,6 @@ class BinaryCompiler:
                     text=True
                 )
 
-                # Print Make output
                 if result.stdout:
                     print(f"[{platform}] Make stdout:")
                     print(result.stdout)

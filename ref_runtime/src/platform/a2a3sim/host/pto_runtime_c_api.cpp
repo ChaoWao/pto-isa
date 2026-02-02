@@ -1,14 +1,15 @@
 /**
- * PTO Runtime C API - Implementation
+ * PTO Runtime C API - Implementation (Simulation)
  *
- * Wraps C++ classes as opaque pointers, providing C interface for ctypes
- * bindings. Simplified single-concept model: Runtime only.
+ * Wraps C++ classes as opaque pointers, providing C interface for ctypes.
+ * This implementation uses thread-based simulation instead of actual device
+ * execution.
  */
 
 #include "host/pto_runtime_c_api.h"
 
 #include <iostream>
-#include <new>  // for placement new
+#include <new>
 #include <vector>
 
 #include "device_runner.h"
@@ -17,9 +18,8 @@
 extern "C" {
 
 /* ===========================================================================
- */
-/* Runtime Implementation Functions (defined in runtimemaker.cpp) */
-/* ===========================================================================
+ * Runtime Implementation Functions (defined in runtimemaker.cpp)
+ * ===========================================================================
  */
 int init_runtime_impl(Runtime* runtime,
                     const uint8_t* orch_so_binary,
@@ -29,19 +29,20 @@ int init_runtime_impl(Runtime* runtime,
                     int func_args_count);
 int validate_runtime_impl(Runtime* runtime);
 
-/* Forward declarations for device memory functions used in init_runtime */
+/* Forward declarations */
 void* device_malloc(size_t size);
 void device_free(void* dev_ptr);
 int copy_to_device(void* dev_ptr, const void* host_ptr, size_t size);
 int copy_from_device(void* host_ptr, const void* dev_ptr, size_t size);
 
 /* ===========================================================================
- */
-/* Runtime API Implementation */
-/* ===========================================================================
+ * Runtime API Implementation
+ * ===========================================================================
  */
 
-size_t get_runtime_size(void) { return sizeof(Runtime); }
+size_t get_runtime_size(void) {
+    return sizeof(Runtime);
+}
 
 int init_runtime(RuntimeHandle runtime,
                 const uint8_t* orch_so_binary,
@@ -61,7 +62,7 @@ int init_runtime(RuntimeHandle runtime,
         // Placement new to construct Runtime in user-allocated memory
         Runtime* r = new (runtime) Runtime();
 
-        // Initialize host API function pointers (host-only, not available on device)
+        // Initialize host API function pointers
         r->host_api.device_malloc = device_malloc;
         r->host_api.device_free = device_free;
         r->host_api.copy_to_device = copy_to_device;
@@ -76,9 +77,8 @@ int init_runtime(RuntimeHandle runtime,
 }
 
 /* ===========================================================================
- */
-/* Device Memory API Implementation */
-/* ===========================================================================
+ * Device Memory API Implementation (Simulation)
+ * ===========================================================================
  */
 
 void* device_malloc(size_t size) {
@@ -127,27 +127,31 @@ int copy_from_device(void* host_ptr, const void* dev_ptr, size_t size) {
 }
 
 int launch_runtime(RuntimeHandle runtime,
-    int aicpu_thread_num,
-    int block_dim,
-    int device_id,
-    const uint8_t* aicpu_binary,
-    size_t aicpu_size,
-    const uint8_t* aicore_binary,
-    size_t aicore_size) {
+                   int aicpu_thread_num,
+                   int block_dim,
+                   int device_id,
+                   const uint8_t* aicpu_binary,
+                   size_t aicpu_size,
+                   const uint8_t* aicore_binary,
+                   size_t aicore_size) {
     if (runtime == NULL) {
         return -1;
     }
-    if (aicpu_binary == NULL || aicpu_size == 0 || aicore_binary == NULL || aicore_size == 0) {
-        return -1;
-    }
+
     try {
         DeviceRunner& runner = DeviceRunner::get();
 
-        // Convert to vectors for run()
-        std::vector<uint8_t> aicpu_vec(aicpu_binary, aicpu_binary + aicpu_size);
-        std::vector<uint8_t> aicore_vec(aicore_binary, aicore_binary + aicore_size);
+        // In simulation, binaries are ignored
+        std::vector<uint8_t> aicpu_vec;
+        std::vector<uint8_t> aicore_vec;
 
-        // Run the runtime (device initialization is handled internally)
+        if (aicpu_binary != NULL && aicpu_size > 0) {
+            aicpu_vec.assign(aicpu_binary, aicpu_binary + aicpu_size);
+        }
+        if (aicore_binary != NULL && aicore_size > 0) {
+            aicore_vec.assign(aicore_binary, aicore_binary + aicore_size);
+        }
+
         Runtime* r = static_cast<Runtime*>(runtime);
         return runner.run(*r, block_dim, device_id, aicpu_vec, aicore_vec, aicpu_thread_num);
     } catch (...) {
@@ -162,6 +166,11 @@ int finalize_runtime(RuntimeHandle runtime) {
     try {
         Runtime* r = static_cast<Runtime*>(runtime);
         int rc = validate_runtime_impl(r);
+
+        // Finalize DeviceRunner (clears last_runtime_ to avoid dangling pointer)
+        DeviceRunner& runner = DeviceRunner::get();
+        runner.finalize();
+
         // Call destructor (user will call free())
         r->~Runtime();
         return rc;
@@ -171,12 +180,8 @@ int finalize_runtime(RuntimeHandle runtime) {
 }
 
 int set_device(int device_id) {
-    try {
-        DeviceRunner& runner = DeviceRunner::get();
-        return runner.ensure_device_set(device_id);
-    } catch (...) {
-        return -1;
-    }
+    (void)device_id;  // Unused in simulation
+    return 0;
 }
 
 int register_kernel(int func_id, const uint8_t* bin_data, size_t bin_size) {
@@ -191,4 +196,4 @@ int register_kernel(int func_id, const uint8_t* bin_data, size_t bin_size) {
     }
 }
 
-} /* extern "C" */
+}  // extern "C"
