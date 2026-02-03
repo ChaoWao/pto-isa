@@ -8,7 +8,7 @@
 
 ### 1.1 目标与定位
 
-- **Rt2** 是 ref_runtime 中的一种运行时实现，与 `host_build_graph` 并列可选（通过 `run_example.py -r rt2` 选择）。
+- **Rt2** 是 ref_runtime 中的运行时实现（通过 `run_example.py -r rt2` 选择）。
 - 设计目标：
   - 支持 **Orchestrator（编排）→ Scheduler（调度）→ Workers（执行）** 三层架构，与方法论文档中的 PTO Runtime 角色一致。
   - 支持 **设备端编排**：编排函数可在 AICPU 线程上执行（如 thread 3），在设备侧构建任务图并提交到 PTO2 共享内存，Host 仅负责加载运行时、拷贝数据、收尾。
@@ -111,7 +111,7 @@ ref_runtime/src/runtime/rt2/
 ### 5.2 差异与简化
 
 - **线程模型**：
-  - 文档中 Orchestrator 可在 Host 或 Device AICPU 上运行；Rt2 当前实现重点在 **设备编排**（AICPU thread 3 为 Orchestrator），Host 编排通过另一套 `host_build_graph` 路径支持，与 rt2 的「设备侧 PTO2」路径分离。
+  - 文档中 Orchestrator 可在 Host 或 Device AICPU 上运行；Rt2 当前实现重点在 **设备编排**（AICPU thread 3 为 Orchestrator）。
   - Rt2 使用 **pto_runtime2_threaded_stub.c**，不链接完整 `pto_runtime2_threaded.c`（无多线程 Orchestrator/Scheduler/Worker 的独立线程池）；设备编排下由 AICPU 上已有的 4 线程（3 Scheduler + 1 Orchestrator）与 AICore 线程协作完成。
 - **内核调度方式**：
   - 文档中 InCore 可为「可编程核」或「固定功能加速器」；Rt2 中 AICore 侧统一为「可编程核」：通过 `function_bin_addr` 指向 GM 中的 kernel 二进制，统一签名 `void kernel(__gm__ int64_t* args)`，无显式 opcode/WorkRequestDescriptor。
@@ -134,7 +134,21 @@ ref_runtime/src/runtime/rt2/
 
 ---
 
-## 6. 参考
+## 6. A2A3 平台编译目标
+
+在 **A2A3 真实硬件**上，代码按运行位置分为两类编译目标，必须严格区分：
+
+| 运行位置 | 内容 | 编译目标 | 说明 |
+|----------|------|----------|------|
+| **AICPU（设备 CPU）** | 编排函数（Orchestrator）、调度逻辑（Scheduler）、PTO2 运行时 | **ARM64**（aarch64） | 由 `BinaryCompiler` 使用 `aarch64-*-gcc/g++` 交叉编译，产出 `libaicpu_kernel.so`，供 CANN 在设备 AICPU 上加载 |
+| **AICore（NPU 核）** | Worker 执行的内核（如 `kernel_add_scalar`、`kernel_mul`） | **CCE Ascend 910B/910C** | 由 `PTOCompiler` 使用 `ccec` 编译，产出 kernel 二进制；通过 `function_bin_addr` 在 GM 中由 AICore 执行 |
+
+- **Orchestrator + Scheduler**：仅包含在 `libaicpu_kernel.so` 中，不包含用户 kernel 源码；构建时通过 rt2 的 `build_config.py` 的 `aicpu.source_dirs`（如 `aicpu`、`runtime`）指定。
+- **Worker 内核**：由测试框架（如 `code_runner`）对 `kernels/aiv/*.cpp` 等单独用 `ccec` 编译，将 `.text` 段加载到设备 GM 并注册为 `function_bin_addr`，不在 AICPU SO 中。
+
+---
+
+## 7. 参考
 
 - 仓库根目录：`docs/runtime_buffer_manager_methods.md` — PTO Runtime 缓冲管理与角色划分的详细设计。
 - ref_runtime rt2：`runtime/README.md` — runtime 目录下各文件的用途说明。

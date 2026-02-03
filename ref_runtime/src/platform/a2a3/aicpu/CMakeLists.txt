@@ -32,12 +32,13 @@ endif()
 
 add_library(aicpu_kernel SHARED ${AICPU_KERNEL_SOURCES})
 
-# Compile options
+# Compile options: C and CXX need different -std (C gets gnu11, CXX gets gnu++17)
 target_compile_options(aicpu_kernel
     PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
+        $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>
         -Wall
         -Wextra
-        -std=gnu++17
         -rdynamic
         -O3
         -fPIC
@@ -69,6 +70,10 @@ target_link_directories(aicpu_kernel
         ${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/devlib/device/
         ${ASCEND_HOME_PATH}/lib64
 )
+
+# Static-link C++ runtime and libgcc so the SO is self-contained on device AICPU
+# (avoids 507018 / 11006 when device has no or different libstdc++)
+target_link_options(aicpu_kernel PRIVATE -static-libstdc++ -static-libgcc)
 
 # Output name
 set_target_properties(aicpu_kernel PROPERTIES OUTPUT_NAME aicpu_kernel)

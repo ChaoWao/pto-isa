@@ -19,11 +19,9 @@
 
 static void debug_tensor_first16(const char* label, const void* ptr, size_t size) {
     if (!ptr || std::getenv("PTO2_DEBUG_TENSOR") == nullptr) return;
-    const unsigned char* p = static_cast<const unsigned char*>(ptr);
-    size_t n = size < 16 ? size : 16;
-    fprintf(stderr, "[Orchestrator/Host] %s=%p first16=", label, ptr);
-    for (size_t i = 0; i < n; i++) fprintf(stderr, "%02x", p[i]);
-    fprintf(stderr, "\n");
+    /* ptr is a device address; host must not dereference it (would segfault). */
+    (void)size;
+    fprintf(stderr, "[Orchestrator/Host] %s=%p (device ptr, first16 not read on host)\n", label, ptr);
 }
 
 #define ARG_DEV_A  0

@@ -50,16 +50,16 @@ This example supports two platforms:
 ### Run on Simulation Platform (No Hardware Required)
 
 ```bash
-# From repository root
+# From repository root (ref_runtime)
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
   -p a2a3sim
 
 # With verbose output
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
   -p a2a3sim \
   -v
 ```
@@ -67,23 +67,23 @@ python examples/scripts/run_example.py \
 ### Run on Ascend Hardware
 
 ```bash
-# From repository root
+# From repository root (ref_runtime)
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
   -p a2a3
 
 # With specific device ID
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
   -p a2a3 \
-  -d 9
+  -d 0
 
 # With verbose output
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
   -p a2a3 \
   -v
 ```
@@ -91,7 +91,7 @@ python examples/scripts/run_example.py \
 ## Directory Structure
 
 ```
-host_build_graph_example/
+easyexample/
 ├── README.md                    # This file
 ├── golden.py                    # Input generation and expected output
 └── kernels/
@@ -101,7 +101,8 @@ host_build_graph_example/
     │   ├── kernel_add_scalar.cpp # Add scalar to tensor elements
     │   └── kernel_mul.cpp        # Element-wise tensor multiplication
     └── orchestration/
-        └── example_orch.cpp      # Task graph building function
+        ├── example_orch.cpp      # Task graph building function
+        └── example_aicpu_orchestration_entry_skeleton.cpp
 ```
 
 ## Files
@@ -141,7 +142,7 @@ ORCHESTRATION = {
 ## Expected Output
 
 ```
-=== Building Runtime: host_build_graph (platform: a2a3/a2a3sim) ===
+=== Building Runtime: rt2 (platform: a2a3/a2a3sim) ===
 ...
 === Compiling and Registering Kernels ===
 Compiling kernel: kernels/aiv/kernel_add.cpp (func_id=0)
@@ -222,6 +223,21 @@ export PTO_ISA_ROOT=/path/to/pto-isa
 - Verify CANN runtime is installed and ASCEND_HOME_PATH is set
 - Check that the specified device ID is valid (0-15)
 - Ensure you have permission to access the device
+
+### AICPU Error 507018 / 0x2a (a2a3)
+
+When running on real Ascend hardware, the runtime loads the AICPU SO by name **libaicpu_kernel.so**. The test framework builds this SO and writes it to the **current working directory** (`getcwd()/libaicpu_kernel.so`) so CANN can load it. If you see `rtStreamSynchronize (AICPU) failed: 507018` or `after Init failed: 507018`:
+
+1. **Kernel name length**: The AICPU init/main kernel names (`DynTileFwkBackendKernelServerInit`, `DynTileFwkBackendKernelServer`) must not be truncated; the host passes them in a buffer of 64 bytes. If the name were truncated, CANN would fail to resolve the symbol (errcode 11006 / inner error).
+2. **SO path**: The test script switches to `ref_runtime` (project root) during launch so `libaicpu_kernel.so` is always written to `ref_runtime/libaicpu_kernel.so`. Run the example from either the repo root or `ref_runtime`; use absolute path for `so_name` so the host can open the SO.
+3. **Enable CANN debug logs** to get SO load / kernel name in the error report:
+   ```bash
+   export ASCEND_GLOBAL_LOG_LEVEL=0
+   export ASCEND_SLOG_PRINT_TO_STDOUT=1
+   ```
+4. **Check plog** under `/root/ascend/log/` or `$ASCEND_HOME/log/` (e.g. `plog/`) for detailed AICPU exception info (fault kernel name, SO path, errcode 11006).
+5. Ensure no other `libaicpu_kernel.so` in `LD_LIBRARY_PATH` or CANN search path shadows the built one.
+6. **Debug launch**: set `PTO2_DEBUG_AICPU_LAUNCH=1` to print so_name and kernel_name on each AICPU launch.
 
 ### "binary_data cannot be empty" Error
 

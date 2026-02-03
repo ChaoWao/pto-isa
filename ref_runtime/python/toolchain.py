@@ -103,7 +103,10 @@ class AICPUToolchain:
         include_dirs_list = ";".join(include_dirs)
         source_dirs_list = ";".join(source_dirs)
 
+        # Explicit ARM64 cross-compilation for A2A3: orchestrator and scheduler run on device AICPU (ARM64)
         return " ".join([
+            f"-DCMAKE_SYSTEM_NAME=Linux",
+            f"-DCMAKE_SYSTEM_PROCESSOR=aarch64",
             f"-DCMAKE_C_COMPILER={self.cc}",
             f"-DCMAKE_CXX_COMPILER={self.cxx}",
             f"-DASCEND_HOME_PATH={self.ascend_home_path}",

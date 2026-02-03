@@ -272,11 +272,12 @@ class CodeRunner:
     Args:
         kernels_dir: Path to kernels directory containing kernel_config.py
         golden_path: Path to golden.py script
-        runtime_name: Runtime implementation name (default: "host_build_graph")
+        runtime_name: Runtime implementation name (default: "rt2")
         device_id: Device ID (defaults to PTO_DEVICE_ID env var or 0)
         platform: Platform name ("a2a3" for hardware, "a2a3sim" for simulation, default: "a2a3")
         use_device_orchestration: If True (rt2 only), orchestration runs on AICPU thread 3; host does not build graph. Deprecated in favor of orchestrator_location.
         orchestrator_location: For rt2, "host_cpu" (orchestration on host, 3 AICPU threads) or "device_aicpu" (orchestration on AICPU thread 3, 4 threads). Ignored for non-rt2.
+        keep_artifacts_dir: If set, compiled .o and .so are written to this directory and not deleted (for debug).
     """
 
     def __init__(
@@ -288,12 +289,18 @@ class CodeRunner:
         platform: str = "a2a3",
         use_device_orchestration: bool = False,
         orchestrator_location: Optional[str] = None,
+        keep_artifacts_dir: Optional[str] = None,
     ):
         self.kernels_dir = Path(kernels_dir).resolve()
         self.golden_path = Path(golden_path).resolve()
         self.runtime_name = runtime_name
         self.platform = platform
         self.project_root = _get_project_root()
+        if keep_artifacts_dir:
+            p = Path(keep_artifacts_dir)
+            self.keep_artifacts_dir = (self.project_root / p).resolve() if not p.is_absolute() else p.resolve()
+        else:
+            self.keep_artifacts_dir = None
 
         # Orchestrator: explicit choice or legacy use_device_orchestration
         if orchestrator_location is not None:
@@ -647,6 +654,11 @@ class CodeRunner:
         if self.platform == "a2a3":
             self.skip_if_no_env()
 
+        # Optional: directory to keep compiled artifacts for debug
+        if self.keep_artifacts_dir is not None:
+            self.keep_artifacts_dir.mkdir(parents=True, exist_ok=True)
+            print(f"\n=== Keeping build artifacts in: {self.keep_artifacts_dir} ===")
+
         # Step 1: Build runtime
         print(f"\n=== Building Runtime: {self.runtime_name} (platform: {self.platform}) ===")
         builder = RuntimeBuilder(runtime_root=self.project_root, platform=self.platform)
@@ -658,6 +670,12 @@ class CodeRunner:
                 f"Failed to build runtime '{self.runtime_name}' for platform '{self.platform}'.\n"
                 f"Error: {e}"
             ) from e
+
+        if self.keep_artifacts_dir is not None:
+            (self.keep_artifacts_dir / "libhost_runtime.so").write_bytes(host_binary)
+            (self.keep_artifacts_dir / "libaicpu_kernel.so").write_bytes(aicpu_binary)
+            (self.keep_artifacts_dir / "aicore_kernel.bin").write_bytes(aicore_binary)
+            print(f"  Saved runtime binaries to {self.keep_artifacts_dir}")
 
         # Step 2: Load runtime and set device
         print(f"\n=== Loading Runtime ({len(host_binary)} bytes) ===")
@@ -679,6 +697,9 @@ class CodeRunner:
             extra_include_dirs=orch_include_dirs,
         )
         print(f"Compiled orchestration: {len(orch_so_binary)} bytes")
+        if self.keep_artifacts_dir is not None:
+            (self.keep_artifacts_dir / "orchestration.so").write_bytes(orch_so_binary)
+            print(f"  Saved orchestration.so to {self.keep_artifacts_dir}")
 
         # Step 4: Compile and register kernels
         print("\n=== Compiling and Registering Kernels ===")
@@ -693,9 +714,14 @@ class CodeRunner:
                 core_type=kernel["core_type"],
                 pto_isa_root=pto_isa_root,
             )
+            if self.keep_artifacts_dir is not None:
+                fid = kernel["func_id"]
+                (self.keep_artifacts_dir / f"kernel_func_id_{fid}.o").write_bytes(incore_o)
             kernel_bin = extract_text_section(incore_o)
             register_kernel(kernel["func_id"], kernel_bin)
 
+        if self.keep_artifacts_dir is not None:
+            print(f"  Saved incore .o files to {self.keep_artifacts_dir}")
         print("All kernels compiled and registered")
 
         # Step 5: Run each parameter set
@@ -783,14 +809,24 @@ class CodeRunner:
             import sys
             sys.stdout.flush()  # Ensure output is visible before potential hang
 
-            launch_runtime(
-                runtime,
-                aicpu_thread_num=self.aicpu_thread_num,
-                block_dim=self.block_dim,
-                device_id=self.device_id,
-                aicpu_binary=aicpu_binary,
-                aicore_binary=aicore_binary,
-            )
+            # On a2a3, C++ writes libaicpu_kernel.so to getcwd(); use project_root so CANN can find it.
+            prev_cwd = None
+            if self.platform == "a2a3":
+                prev_cwd = os.getcwd()
+                os.chdir(self.project_root)
+
+            try:
+                launch_runtime(
+                    runtime,
+                    aicpu_thread_num=self.aicpu_thread_num,
+                    block_dim=self.block_dim,
+                    device_id=self.device_id,
+                    aicpu_binary=aicpu_binary,
+                    aicore_binary=aicore_binary,
+                )
+            finally:
+                if prev_cwd is not None:
+                    os.chdir(prev_cwd)
 
             print("Launch completed successfully")  # Will only print if not hung
 

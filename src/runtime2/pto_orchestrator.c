@@ -450,6 +450,9 @@ void* pto2_task_get_output(PTO2OrchestratorState* orch,
 // =============================================================================
 
 void pto2_orchestrator_done(PTO2OrchestratorState* orch) {
+    int32_t total_tasks = orch->task_ring.current_index;
+    fprintf(stdout, "=== [Orchestrator] total_tasks=%d ===\n", total_tasks);
+    fflush(stdout);
     PTO2_STORE_RELEASE(&orch->sm_handle->header->orchestrator_done, 1);
 }
 

@@ -224,7 +224,7 @@ void pto2_runtime_execute(PTO2Runtime* rt) {
         
         // Try to dispatch ready tasks for each worker type
         for (int wtype = 0; wtype < PTO2_NUM_WORKER_TYPES; wtype++) {
-            int32_t task_id = pto2_scheduler_get_ready_task(&rt->scheduler, wtype);
+            int32_t task_id = pto2_scheduler_get_ready_task(&rt->scheduler, (PTO2WorkerType)wtype);
             
             if (task_id >= 0) {
                 dispatched = true;

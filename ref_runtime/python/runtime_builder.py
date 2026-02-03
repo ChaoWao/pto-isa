@@ -11,7 +11,7 @@ class RuntimeBuilder:
 
     Accepts a platform selection to provide correctly configured
     BinaryCompiler and PTOCompiler instances. Runtime and platform
-    are orthogonal — the same runtime (e.g., host_build_graph) can
+    are orthogonal — the same runtime (e.g., rt2) can
     be compiled for any platform (e.g., a2a3, a2a3sim).
     """
 
@@ -59,7 +59,7 @@ class RuntimeBuilder:
         Build a specific runtime implementation by name.
 
         Args:
-            name: Name of the runtime implementation (e.g. 'host_build_graph')
+            name: Name of the runtime implementation (e.g. 'rt2')
 
         Returns:
             Tuple of (host_binary, aicpu_binary, aicore_binary) as bytes

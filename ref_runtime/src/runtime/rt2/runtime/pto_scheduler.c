@@ -123,6 +123,7 @@ bool pto2_ready_queue_push_wake_min_clock(PTO2ReadyQueue* queue, int32_t task_id
                                            volatile bool* worker_waiting,
                                            pthread_cond_t* worker_conds,
                                            int32_t worker_start, int32_t worker_end) {
+    (void)worker_clocks;  /* reserved for min-clock wake; currently broadcast to all */
     pthread_mutex_lock(mutex);
     
     bool success = pto2_ready_queue_push(queue, task_id);
@@ -395,7 +396,7 @@ static void check_and_handle_consumed(PTO2SchedulerState* sched,
     
     // Use CAS to atomically transition COMPLETED -> CONSUMED
     // This prevents multiple threads from transitioning the same task
-    int32_t expected = PTO2_TASK_COMPLETED;
+    PTO2TaskState expected = PTO2_TASK_COMPLETED;
     if (!__atomic_compare_exchange_n(&sched->task_state[slot], &expected, PTO2_TASK_CONSUMED,
                                       false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
         // CAS failed - either not COMPLETED or another thread already transitioned
@@ -591,6 +592,7 @@ void pto2_scheduler_print_queues(PTO2SchedulerState* sched) {
 /**
  * Thread-safe version of check_ready that signals workers
  */
+__attribute__((unused))
 static void check_ready_threadsafe(PTO2SchedulerState* sched, int32_t task_id,
                                     PTO2TaskDescriptor* task,
                                     PTO2ThreadContext* thread_ctx) {
@@ -611,12 +613,12 @@ static void check_ready_threadsafe(PTO2SchedulerState* sched, int32_t task_id,
     int32_t refcount = __atomic_load_n(&sched->fanin_refcount[slot], __ATOMIC_ACQUIRE);
     if (refcount >= fanin_count) {
         // Use CAS to atomically transition PENDING -> READY
-        int32_t expected = PTO2_TASK_PENDING;
+        PTO2TaskState expected = PTO2_TASK_PENDING;
         if (__atomic_compare_exchange_n(&sched->task_state[slot], &expected, PTO2_TASK_READY,
                                          false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             // Successfully transitioned to READY
-            pto2_scheduler_enqueue_ready_threadsafe(sched, task_id, 
-                                                     task->worker_type, thread_ctx);
+            pto2_scheduler_enqueue_ready_threadsafe(sched, task_id,
+                                                     (PTO2WorkerType)task->worker_type, thread_ctx);
         } else {
             // CAS failed - log if the state was unexpected
             int32_t actual = __atomic_load_n(&sched->task_state[slot], __ATOMIC_ACQUIRE);
@@ -681,11 +683,11 @@ static void on_task_complete_threadsafe(PTO2SchedulerState* sched, int32_t task_
         // Check if consumer is now ready - inline the check here to avoid race
         if (new_refcount >= fanin_count) {
             // Try to transition to READY
-            int32_t expected = PTO2_TASK_PENDING;
+            PTO2TaskState expected = PTO2_TASK_PENDING;
             if (__atomic_compare_exchange_n(&sched->task_state[consumer_slot], &expected, PTO2_TASK_READY,
                                              false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-                pto2_scheduler_enqueue_ready_threadsafe(sched, consumer_id, 
-                                                         consumer->worker_type, thread_ctx);
+                pto2_scheduler_enqueue_ready_threadsafe(sched, consumer_id,
+                                                         (PTO2WorkerType)consumer->worker_type, thread_ctx);
             }
             // CAS failure is OK - means someone else already transitioned to READY
         }
@@ -702,9 +704,8 @@ static void on_task_complete_threadsafe(PTO2SchedulerState* sched, int32_t task_
         fprintf(stderr, "[ERROR] Task %d: fanout_head=%d but no consumers updated!\n",
                 task_id, fanout_head);
     }
-    
-    // Debug: warn if no consumers were updated but fanout_count > scope_depth
-    if (consumers_updated == 0 && task->fanout_count > task->scope_depth) {
+    /* Debug: warn if no consumers were updated but we expected some */
+    if (consumers_updated == 0 && expected_consumers > 0) {
         fprintf(stderr, "[WARNING] Task %d (%s) completed with fanout_head=%d but no consumers updated! "
                 "fanout_count=%d, scope_depth=%d\n",
                 task_id, task->func_name, fanout_head, task->fanout_count, task->scope_depth);
@@ -816,11 +817,11 @@ static int32_t process_new_tasks_threadsafe(PTO2SchedulerState* sched,
         int32_t fanin_refcount = __atomic_load_n(&sched->fanin_refcount[slot], __ATOMIC_ACQUIRE);
         if (fanin_count == 0 || fanin_refcount >= fanin_count) {
             // Use CAS to transition to READY (another thread might have already done this)
-            int32_t expected = PTO2_TASK_PENDING;
+            PTO2TaskState expected = PTO2_TASK_PENDING;
             if (__atomic_compare_exchange_n(&sched->task_state[slot], &expected, PTO2_TASK_READY,
                                              false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
                 pto2_scheduler_enqueue_ready_threadsafe(sched, task_id,
-                                                         task->worker_type, thread_ctx);
+                                                         (PTO2WorkerType)task->worker_type, thread_ctx);
             }
         }
         

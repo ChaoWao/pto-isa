@@ -20,13 +20,13 @@ class TestRuntimeBuilderDiscovery:
     """Test runtime discovery from src/runtime/ subdirectories."""
 
     def test_discovers_real_runtimes(self):
-        """RuntimeBuilder discovers host_build_graph from the real project tree."""
+        """RuntimeBuilder discovers rt2 from the real project tree."""
         from runtime_builder import RuntimeBuilder
 
         # Use a2a3sim platform which doesn't require ASCEND_HOME_PATH
         builder = RuntimeBuilder(platform="a2a3sim", runtime_root=PROJECT_ROOT)
         runtimes = builder.list_runtimes()
-        assert "host_build_graph" in runtimes
+        assert "rt2" in runtimes
 
     def test_default_runtime_root(self):
         """Default runtime_root resolves to the project root."""
@@ -126,7 +126,7 @@ class TestRuntimeBuilderBuildErrors:
         from runtime_builder import RuntimeBuilder
 
         builder = RuntimeBuilder(platform="a2a3sim", runtime_root=PROJECT_ROOT)
-        with pytest.raises(ValueError, match="host_build_graph"):
+        with pytest.raises(ValueError, match="rt2"):
             builder.build("nonexistent_runtime")
 
     @patch("runtime_builder.BinaryCompiler")
@@ -258,7 +258,7 @@ requires_ascend = pytest.mark.skipif(
 
 @requires_ascend
 class TestRuntimeBuilderIntegration:
-    """Integration tests that actually compile host_build_graph."""
+    """Integration tests that actually compile rt2."""
 
     @pytest.fixture(autouse=True)
     def _reset_compiler_singleton(self):
@@ -268,12 +268,12 @@ class TestRuntimeBuilderIntegration:
         yield
         BinaryCompiler._instances.clear()
 
-    def test_build_host_build_graph_returns_three_binaries(self):
-        """build('host_build_graph') produces a 3-tuple of non-empty bytes."""
+    def test_build_rt2_returns_three_binaries(self):
+        """build('rt2') produces a 3-tuple of non-empty bytes."""
         from runtime_builder import RuntimeBuilder
 
         builder = RuntimeBuilder(platform="a2a3", runtime_root=PROJECT_ROOT)
-        result = builder.build("host_build_graph")
+        result = builder.build("rt2")
 
         assert isinstance(result, tuple)
         assert len(result) == 3

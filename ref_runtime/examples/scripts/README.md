@@ -28,18 +28,18 @@ python examples/scripts/run_example.py \
 
 ```bash
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
-  -p a2a3
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
+  -r rt2 -p a2a3
 ```
 
 #### Running Simulation Platform Tests (No Hardware Required)
 
 ```bash
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_sim_example/kernels \
-  -g examples/host_build_graph_sim_example/golden.py \
-  -p a2a3sim
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
+  -r rt2 -p a2a3sim
 ```
 
 ## Command Line Arguments
@@ -52,7 +52,7 @@ python examples/scripts/run_example.py \
 | `--golden` | `-g` | golden.py script path | **Required** |
 | `--platform` | `-p` | Platform name: `a2a3` or `a2a3sim` | `a2a3` |
 | `--device` | `-d` | Device ID | From env var or 0 |
-| `--runtime` | `-r` | Runtime implementation name | `host_build_graph` |
+| `--runtime` | `-r` | Runtime implementation name | `rt2` |
 | `--verbose` | `-v` | Enable verbose output | False |
 
 ### Platform Description
@@ -272,7 +272,7 @@ python examples/scripts/run_example.py -k my_test/kernels -g my_test/golden.py -
 ### Success Example
 
 ```
-=== Building Runtime: host_build_graph (platform: a2a3sim) ===
+=== Building Runtime: rt2 (platform: a2a3sim) ===
 ...
 === Compiling and Registering Kernels ===
 Compiling kernel: kernels/aiv/kernel_add.cpp (func_id=0)
@@ -307,8 +307,7 @@ TEST FAILED: Output 'f' does not match golden
 
 ## Reference Examples
 
-- **Hardware Example**: [examples/host_build_graph_example/](../host_build_graph_example/)
-- **Simulation Example**: [examples/host_build_graph_sim_example/](../host_build_graph_sim_example/)
+- **Example**: [examples/easyexample/](../easyexample/) (a2a3 / a2a3sim)
 
 ## FAQ
 
@@ -392,7 +391,7 @@ from code_runner import CodeRunner
 runner = CodeRunner(
     kernels_dir="my_test/kernels",
     golden_path="my_test/golden.py",
-    runtime_name="host_build_graph",
+    runtime_name="rt2",
     platform="a2a3sim",
     device_id=0,
 )

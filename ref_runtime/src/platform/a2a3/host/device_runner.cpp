@@ -7,8 +7,12 @@
 
 #include "device_runner.h"
 
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "runtime.h"
@@ -199,7 +203,57 @@ int DeviceRunner::ensure_binaries_loaded(
 
     aicore_kernel_binary_ = aicore_kernel_binary;
 
-    // Load AICPU SO
+    // Write AICPU SO so CANN aicpu_scheduler can load by so_name. Prefer current working
+    // directory (e.g. ref_runtime when Python chdir(project_root)), as some CANN setups
+    // may only load SO from non-/tmp paths; fall back to /tmp if cwd is not writable.
+    aicpu_so_path_.clear();
+    {
+        char cwd_buf[4096];
+        const char* cwd = getcwd(cwd_buf, sizeof(cwd_buf));
+        std::string path_cwd = (cwd && cwd[0]) ? (std::string(cwd) + "/libaicpu_kernel.so") : "";
+        std::string path_tmp = "/tmp/libaicpu_kernel_" + std::to_string(getpid()) + ".so";
+        std::string path_to_use;
+        if (!path_cwd.empty()) {
+            std::ofstream ofs(path_cwd, std::ios::binary);
+            if (ofs) {
+                ofs.write(reinterpret_cast<const char*>(aicpu_so_binary.data()),
+                          static_cast<std::streamsize>(aicpu_so_binary.size()));
+                if (ofs.good()) {
+                    path_to_use = path_cwd;
+                }
+            }
+        }
+        if (path_to_use.empty()) {
+            std::ofstream ofs(path_tmp, std::ios::binary);
+            if (!ofs) {
+                std::cerr << "Error: Failed to open " << path_tmp << " for AICPU SO (cwd write also failed)\n";
+                return -1;
+            }
+            ofs.write(reinterpret_cast<const char*>(aicpu_so_binary.data()),
+                      static_cast<std::streamsize>(aicpu_so_binary.size()));
+            ofs.close();
+            if (!ofs.good()) {
+                std::cerr << "Error: Failed to write AICPU SO to " << path_tmp << '\n';
+                return -1;
+            }
+            path_to_use = path_tmp;
+        }
+        // CANN so_name must be absolute path; normalize with realpath, else prepend cwd.
+        char resolved[4096];
+        if (realpath(path_to_use.c_str(), resolved) != nullptr) {
+            aicpu_so_path_ = resolved;
+        } else {
+            aicpu_so_path_ = path_to_use;
+            if (!aicpu_so_path_.empty() && aicpu_so_path_[0] != '/') {
+                const char* cwd2 = getcwd(cwd_buf, sizeof(cwd_buf));
+                if (cwd2 && cwd2[0])
+                    aicpu_so_path_ = std::string(cwd2) + "/" + aicpu_so_path_;
+            }
+        }
+        std::cout << "DeviceRunner: wrote AICPU SO to " << aicpu_so_path_ << " (absolute) for CANN load\n";
+    }
+
+    // Load AICPU SO to device memory
     int rc = so_info_.init(aicpu_so_binary, mem_alloc_);
     if (rc != 0) {
         std::cerr << "Error: AicpuSoInfo::init failed: " << rc << '\n';
@@ -299,16 +353,27 @@ int DeviceRunner::run(Runtime& runtime,
         return rc;
     }
 
-    // Launch AICPU init kernel
-    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkKernelServerInit", 1);
+    // Launch AICPU init kernel（打印 so_path / kernel 便于定位 507018）
+    std::cout << "DeviceRunner: AICPU Init: so_path=" << aicpu_so_path_
+              << " kernel=DynTileFwkBackendKernelServerInit aicpu_num=1\n";
+    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkBackendKernelServerInit", 1);
     if (rc != 0) {
-        std::cerr << "Error: launch_aicpu_kernel (init) failed: " << rc << '\n';
+        std::cerr << "Error: launch_aicpu_kernel (init) failed: " << rc << " (0x" << std::hex << rc << std::dec << ")\n";
         kernel_args_.finalize_runtime_args();
         return rc;
     }
+    std::cout << "DeviceRunner: AICPU Init launch returned 0, syncing stream...\n";
+    rc = rtStreamSynchronize(stream_aicpu_);
+    if (rc != 0) {
+        std::cerr << "Error: rtStreamSynchronize (AICPU) after Init failed: " << rc << " (0x" << std::hex << rc << std::dec
+                  << ", Init kernel failed). Check plog (e.g. ~/ascend/log or /var/log/ascend_plog) for AICPU/KFC details.\n";
+        kernel_args_.finalize_runtime_args();
+        return rc;
+    }
+    std::cout << "DeviceRunner: AICPU Init kernel completed OK\n";
 
     // Launch AICPU main kernel
-    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkKernelServer", launch_aicpu_num);
+    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkBackendKernelServer", launch_aicpu_num);
     if (rc != 0) {
         std::cerr << "Error: launch_aicpu_kernel (main) failed: " << rc << '\n';
         kernel_args_.finalize_runtime_args();
@@ -404,16 +469,33 @@ int DeviceRunner::finalize() {
 }
 
 int DeviceRunner::launch_aicpu_kernel(rtStream_t stream, KernelArgs* k_args, const char* kernel_name, int aicpu_num) {
+    // Args must outlive async use by aicpu_scheduler (plog: "func is nullptr" if scheduler
+    // reads stale stack). Use static buffer so so_name/kernel_name are valid when scheduler loads SO.
     struct Args {
         KernelArgs k_args;
-        char kernel_name[32];
-        const char so_name[32] = {"libaicpu_extend_kernels.so"};
-        const char op_name[32] = {""};
-    } args;
-
+        char kernel_name[64];   // Must fit "DynTileFwkBackendKernelServerInit" (33 chars)
+        char so_name[256];
+        char op_name[32];
+    };
+    static Args s_args;  // persistent for async KFC loader
+    Args& args = s_args;
     args.k_args = *k_args;
     std::strncpy(args.kernel_name, kernel_name, sizeof(args.kernel_name) - 1);
     args.kernel_name[sizeof(args.kernel_name) - 1] = '\0';
+    if (std::strlen(kernel_name) >= sizeof(args.kernel_name)) {
+        std::cerr << "Error: kernel_name truncated: '" << kernel_name << "' (max " << (sizeof(args.kernel_name) - 1) << " chars)\n";
+        return -1;
+    }
+    if (!aicpu_so_path_.empty()) {
+        std::strncpy(args.so_name, aicpu_so_path_.c_str(), sizeof(args.so_name) - 1);
+    } else {
+        std::strncpy(args.so_name, "libaicpu_kernel.so", sizeof(args.so_name) - 1);
+    }
+    args.so_name[sizeof(args.so_name) - 1] = '\0';
+
+    // 定位 507018 时可见 KFC 实际使用的 so_name（与 run() 中 so_path 一致）
+    std::cout << "DeviceRunner: launch_aicpu so_name=" << args.so_name << " kernel_name=" << args.kernel_name
+              << " aicpu_num=" << aicpu_num << '\n';
 
     rtAicpuArgsEx_t rt_args;
     std::memset(&rt_args, 0, sizeof(rt_args));

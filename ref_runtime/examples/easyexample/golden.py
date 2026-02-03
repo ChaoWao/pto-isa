@@ -1,8 +1,8 @@
 """
-Golden script for host_build_graph example.
+Golden script for easyexample (rt2 runtime).
 
 This script defines the input data generation and expected output computation
-for the host_build_graph example (both a2a3 and a2a3sim platforms).
+for the easyexample (both a2a3 and a2a3sim platforms).
 
 Computation:
     f = (a + b + 1) * (a + b + 2)

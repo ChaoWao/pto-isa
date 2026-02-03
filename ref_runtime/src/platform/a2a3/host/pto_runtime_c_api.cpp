@@ -41,7 +41,8 @@ int init_runtime_impl(Runtime* runtime,
                     const char* orch_func_name,
                     uint64_t* func_args,
                     int func_args_count,
-                    int use_device_orchestration);
+                    int use_device_orchestration,
+                    int run_orchestrator_on_host);
 int validate_runtime_impl(Runtime* runtime);
 
 /* Forward declarations for device memory functions used in init_runtime */
@@ -64,11 +65,12 @@ int init_runtime(RuntimeHandle runtime,
                 const char* orch_func_name,
                 uint64_t* func_args,
                 int func_args_count,
-                int use_device_orchestration) {
+                int use_device_orchestration,
+                int run_orchestrator_on_host) {
     if (runtime == NULL) {
         return -1;
     }
-    if (!use_device_orchestration &&
+    if (!use_device_orchestration && !run_orchestrator_on_host &&
         (orch_so_binary == NULL || orch_so_size == 0 || orch_func_name == NULL)) {
         std::cerr << "Error: Invalid orchestration parameters\n";
         return -1;
@@ -87,7 +89,7 @@ int init_runtime(RuntimeHandle runtime,
         // Delegate SO loading and orchestration to init_runtime_impl
         return init_runtime_impl(r, orch_so_binary, orch_so_size,
                                orch_func_name, func_args, func_args_count,
-                               use_device_orchestration);
+                               use_device_orchestration, run_orchestrator_on_host);
     } catch (...) {
         return -1;
     }

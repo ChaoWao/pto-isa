@@ -12,8 +12,8 @@ Usage:
     python examples/scripts/run_example.py -k ./kernels -g ./golden.py -r rt2 -p a2a3sim
 
 Runtime (-r) and platform (-p) are independent:
-  - -r rt2 | host_build_graph  : which runtime implementation (task graph / scheduler)
-  - -p a2a3 | a2a3sim          : hardware or simulation
+  - -r rt2  : runtime implementation (task graph / scheduler)
+  - -p a2a3 | a2a3sim  : hardware or simulation
 
 Examples:
     # rt2 + simulation (easyexample)
@@ -28,12 +28,11 @@ Examples:
     python examples/scripts/run_example.py -k examples/easyexample/kernels \\
         -g examples/easyexample/golden.py -r rt2 -p a2a3sim --orchestrator device_aicpu
 
-    # host_build_graph + simulation
-    python examples/scripts/run_example.py -k examples/easyexample/kernels \\
-        -g examples/easyexample/golden.py -r host_build_graph -p a2a3sim
-
     # Run with specific device
     python examples/scripts/run_example.py -k ./kernels -g ./golden.py -r rt2 -d 0 -p a2a3
+
+    # Keep compiled .o and .so for debug (path relative to project root)
+    python examples/scripts/run_example.py -k examples/easyexample/kernels -g examples/easyexample/golden.py -r rt2 -p a2a3 --keep-artifacts build_artifacts
 """
 
 import argparse
@@ -48,7 +47,7 @@ def main():
         epilog="""
 Examples:
     python examples/scripts/run_example.py -k examples/easyexample/kernels -g examples/easyexample/golden.py -r rt2 -p a2a3sim
-    python examples/scripts/run_example.py -k ./kernels -g ./golden.py -r host_build_graph -p a2a3 -d 0
+    python examples/scripts/run_example.py -k ./kernels -g ./golden.py -r rt2 -p a2a3 -d 0
 
 Golden.py interface:
     def generate_inputs(params: dict) -> dict:
@@ -88,9 +87,9 @@ Golden.py interface:
 
     parser.add_argument(
         "-r", "--runtime",
-        default="host_build_graph",
-        choices=["rt2", "host_build_graph"],
-        help="Runtime implementation: 'rt2' (runtime2 merge) or 'host_build_graph' (default: host_build_graph). Independent of -p."
+        default="rt2",
+        choices=["rt2"],
+        help="Runtime implementation: 'rt2'. Independent of -p."
     )
 
     parser.add_argument(
@@ -109,14 +108,21 @@ Golden.py interface:
     parser.add_argument(
         "--orchestrator",
         choices=["host_cpu", "device_aicpu"],
-        default=None,
-        help="With -r rt2: run orchestrator on host CPU (host_cpu) or on AICPU thread 3 (device_aicpu). Default: host_cpu. Ignored for other runtimes."
+        default="device_aicpu",
+        help="With -r rt2: run orchestrator on host CPU (host_cpu) or on AICPU thread 3 (device_aicpu). Default: device_aicpu. Ignored for other runtimes."
     )
 
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose output"
+    )
+
+    parser.add_argument(
+        "--keep-artifacts",
+        metavar="DIR",
+        default=None,
+        help="Directory to keep compiled .o and .so files for debug (not deleted). E.g. build_artifacts or /tmp/pto_build."
     )
 
     args = parser.parse_args()
@@ -149,10 +155,10 @@ Golden.py interface:
         print(f"Error: kernel_config.py not found in {kernels_path}")
         return 1
 
-    # Orchestrator location for rt2: explicit --orchestrator or legacy -u
+    # Orchestrator location for rt2 (default: device_aicpu). -u is deprecated, same as --orchestrator device_aicpu.
     orchestrator = args.orchestrator
-    if orchestrator is None:
-        orchestrator = "device_aicpu" if getattr(args, "use_device_orchestration", False) else "host_cpu"
+    if getattr(args, "use_device_orchestration", False):
+        orchestrator = "device_aicpu"
 
     # Import and run
     try:
@@ -166,6 +172,7 @@ Golden.py interface:
             platform=args.platform,
             use_device_orchestration=getattr(args, "use_device_orchestration", False),
             orchestrator_location=orchestrator,
+            keep_artifacts_dir=args.keep_artifacts,
         )
 
         runner.run()

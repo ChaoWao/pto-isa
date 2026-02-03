@@ -12,6 +12,12 @@
 #include <stdio.h>
 #include <stdlib.h>  // for exit()
 
+// Set to 1 to enable periodic BLOCKED/Unblocked messages during spin-wait (noisy).
+// Keep 0 for normal runs; only FATAL deadlock message is always printed.
+#ifndef PTO2_SPIN_VERBOSE_LOGGING
+#define PTO2_SPIN_VERBOSE_LOGGING 0
+#endif
+
 // =============================================================================
 // Heap Ring Buffer Implementation
 // =============================================================================
@@ -38,15 +44,18 @@ void* pto2_heap_ring_alloc(PTO2HeapRing* ring, int32_t size) {
     while (1) {
         void* ptr = pto2_heap_ring_try_alloc(ring, size);
         if (ptr != NULL) {
+#if PTO2_SPIN_VERBOSE_LOGGING
             if (notified) {
                 fprintf(stderr, "[HeapRing] Unblocked after %d spins\n", spin_count);
             }
+#endif
             return ptr;
         }
         
         // No space available, spin-wait
         spin_count++;
         
+#if PTO2_SPIN_VERBOSE_LOGGING
         // Periodic block notification
         if (spin_count % PTO2_BLOCK_NOTIFY_INTERVAL == 0) {
             int32_t tail = PTO2_LOAD_ACQUIRE(ring->tail_ptr);
@@ -56,6 +65,7 @@ void* pto2_heap_ring_alloc(PTO2HeapRing* ring, int32_t size) {
                     size, available, ring->top, tail, spin_count);
             notified = true;
         }
+#endif
         
         PTO2_SPIN_PAUSE();
     }
@@ -153,16 +163,19 @@ int32_t pto2_task_ring_alloc(PTO2TaskRing* ring) {
     while (1) {
         int32_t task_id = pto2_task_ring_try_alloc(ring);
         if (task_id >= 0) {
+#if PTO2_SPIN_VERBOSE_LOGGING
             if (notified) {
                 fprintf(stderr, "[TaskRing] Unblocked after %d spins, task_id=%d\n", 
                         spin_count, task_id);
             }
+#endif
             return task_id;
         }
         
         // Window is full, spin-wait (with yield to prevent CPU starvation)
         spin_count++;
         
+#if PTO2_SPIN_VERBOSE_LOGGING
         // Periodic block notification
         if (spin_count % PTO2_BLOCK_NOTIFY_INTERVAL == 0 && 
             spin_count < PTO2_FLOW_CONTROL_SPIN_LIMIT) {
@@ -174,6 +187,7 @@ int32_t pto2_task_ring_alloc(PTO2TaskRing* ring) {
                     100.0 * active_count / ring->window_size, spin_count);
             notified = true;
         }
+#endif
         
         // Check for potential deadlock
         if (spin_count >= PTO2_FLOW_CONTROL_SPIN_LIMIT) {

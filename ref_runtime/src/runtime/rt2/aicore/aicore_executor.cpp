@@ -127,16 +127,10 @@ __aicore__ __attribute__((weak)) void aicore_execute(__gm__ Runtime* runtime, in
         }
 
         // Execute task if assigned (task != 0).
-        // Device PTO2 mode: Handshake.task = PTO2DispatchPayload*; use execute_task_from_payload.
-        // Host mode: Handshake.task = Task*; use execute_task.
+        // Rt2 AICore always receives PTO2DispatchPayload* from AICPU (no host Runtime calls on device).
         if (my_hank->task_status == 1 && my_hank->task != 0) {
-            if (runtime->get_use_pto2_dispatch()) {
-                __gm__ PTO2DispatchPayload* payload = reinterpret_cast<__gm__ PTO2DispatchPayload*>(my_hank->task);
-                execute_task_from_payload(payload);
-            } else {
-                __gm__ Task* task_ptr = reinterpret_cast<__gm__ Task*>(my_hank->task);
-                execute_task(task_ptr);
-            }
+            __gm__ PTO2DispatchPayload* payload = reinterpret_cast<__gm__ PTO2DispatchPayload*>(my_hank->task);
+            execute_task_from_payload(payload);
             my_hank->task_status = 0;
         }
     }

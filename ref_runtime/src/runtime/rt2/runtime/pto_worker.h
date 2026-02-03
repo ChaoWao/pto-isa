@@ -17,9 +17,8 @@
 #include "pto_shared_memory.h"
 #include "pto_scheduler.h"
 
-// Forward declaration
+// Forward declaration (PTO2ThreadContext is defined in pto_runtime2_types.h)
 struct PTO2Runtime;
-struct PTO2ThreadContext;
 
 // =============================================================================
 // Worker Initialization

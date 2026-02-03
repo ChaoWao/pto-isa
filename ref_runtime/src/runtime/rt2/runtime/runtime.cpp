@@ -42,7 +42,7 @@ Runtime::Runtime() {
     pto2_gm_heap_size_ = 0;
     orch_args_ = nullptr;
     orch_arg_count_ = 0;
-    use_pto2_dispatch_ = false;
+    use_pto2_dispatch_ = true;  // default true
     for (int i = 0; i < RUNTIME_MAX_FUNC_ID; i++) {
         func_id_to_addr_[i] = 0;
     }

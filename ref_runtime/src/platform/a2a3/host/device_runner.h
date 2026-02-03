@@ -318,6 +318,7 @@ private:
     // Kernel binary management
     bool binaries_loaded_{false};            // true after AICPU SO loaded
     std::map<int, uint64_t> func_id_to_addr_;  // func_id -> function_bin_addr (device GM)
+    std::string aicpu_so_path_;              // absolute path of written libaicpu_kernel.so for CANN
 
     /**
      * Ensure device is initialized (lazy initialization)

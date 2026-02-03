@@ -65,9 +65,9 @@ The test framework automatically handles PTO_ISA_ROOT setup:
 **Automatic Setup (Recommended):**
 Just run your example - pto-isa will be cloned automatically on first run:
 ```bash
-python examples/scripts/run_example.py -k examples/host_build_graph_example/kernels \
-                                       -g examples/host_build_graph_example/golden.py \
-                                       -p a2a3sim
+python examples/scripts/run_example.py -k examples/easyexample/kernels \
+                                       -g examples/easyexample/golden.py \
+                                       -r rt2 -p a2a3sim
 ```
 
 **Manual Setup** (if auto-setup fails or you prefer manual control):
@@ -129,7 +129,7 @@ The simulation platform (`a2a3sim`) uses host threads to emulate AICPU/AICore ex
 ### 2. AICPU Kernel (`src/platform/a2a3/aicpu/`)
 **Device program** - Task scheduler running on AICPU processor
 - `kernel.cpp`: Kernel entry points and handshake protocol
-- Runtime-specific executor in `src/runtime/host_build_graph/aicpu/`
+- Runtime-specific executor in `src/runtime/rt2/aicpu/`
 - Compiled to device binary at build time
 
 **Key Responsibilities:**
@@ -142,7 +142,7 @@ The simulation platform (`a2a3sim`) uses host threads to emulate AICPU/AICore ex
 ### 3. AICore Kernel (`src/platform/a2a3/aicore/`)
 **Device program** - Computation kernels executing on AICore processors
 - `kernel.cpp`: Task execution kernels (add, mul, etc.)
-- Runtime-specific executor in `src/runtime/host_build_graph/aicore/`
+- Runtime-specific executor in `src/runtime/rt2/aicore/`
 - Compiled to object file (.o) at build time
 
 **Key Responsibilities:**
@@ -218,7 +218,7 @@ pto-runtime/
 │   │       └── common/                 # Shared structures
 │   │
 │   └── runtime/                        # Runtime implementations
-│       └── host_build_graph/           # Host-built graph runtime
+│       └── rt2/                         # Rt2 runtime (task graph / scheduler)
 │           ├── build_config.py         # Build configuration
 │           ├── host/
 │           │   └── runtime_maker.cpp    # C++ runtime builder & validator
@@ -243,22 +243,17 @@ pto-runtime/
 │   │   ├── code_runner.py              # Test execution engine
 │   │   └── README.md                   # Test framework documentation
 │   │
-│   ├── host_build_graph_example/       # Host-built graph example (a2a3)
-│   │   ├── README.md                   # Example documentation
-│   │   ├── golden.py                   # Input generation and expected output
-│   │   └── kernels/
-│   │       ├── kernel_config.py        # Kernel configuration
-│   │       ├── aiv/                    # AIV kernels
-│   │       │   ├── kernel_add.cpp
-│   │       │   ├── kernel_add_scalar.cpp
-│   │       │   └── kernel_mul.cpp
-│   │       └── orchestration/
-│   │           └── example_orch.cpp    # Orchestration kernel
-│   │
-│   └── host_build_graph_sim_example/   # Simulation example (a2a3sim)
+│   └── easyexample/                    # Example (a2a3 / a2a3sim)
 │       ├── README.md                   # Example documentation
 │       ├── golden.py                   # Input generation and expected output
-│       └── kernels/                    # Simulation kernels (plain C++)
+│       └── kernels/
+│           ├── kernel_config.py        # Kernel configuration
+│           ├── aiv/                    # AIV kernels
+│           │   ├── kernel_add.cpp
+│           │   ├── kernel_add_scalar.cpp
+│           │   └── kernel_mul.cpp
+│           └── orchestration/
+│               └── example_orch.cpp    # Orchestration kernel
 │
 └── tests/                              # Test suite
     └── test_runtime_builder.py         # Runtime builder tests
@@ -359,15 +354,15 @@ Use the test framework to run examples:
 ```bash
 # Hardware platform (requires Ascend device)
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_example/kernels \
-  -g examples/host_build_graph_example/golden.py \
-  -p a2a3
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
+  -r rt2 -p a2a3
 
 # Simulation platform (no hardware required)
 python examples/scripts/run_example.py \
-  -k examples/host_build_graph_sim_example/kernels \
-  -g examples/host_build_graph_sim_example/golden.py \
-  -p a2a3sim
+  -k examples/easyexample/kernels \
+  -g examples/easyexample/golden.py \
+  -r rt2 -p a2a3sim
 ```
 
 This example:
@@ -380,7 +375,7 @@ This example:
 
 Expected output:
 ```
-=== Building Runtime: host_build_graph (platform: a2a3sim) ===
+=== Building Runtime: rt2 (platform: a2a3sim) ===
 ...
 === Comparing Results ===
 Comparing f: shape=(16384,), dtype=float32
@@ -575,7 +570,7 @@ Full Python API with ctypes:
 ## Configuration
 
 ### Compile-time Configuration (Runtime Limits)
-In [src/runtime/host_build_graph/runtime/runtime.h](src/runtime/host_build_graph/runtime/runtime.h):
+In [src/runtime/rt2/runtime/runtime.h](src/runtime/rt2/runtime/runtime.h):
 ```cpp
 #define RUNTIME_MAX_TASKS 1024     // Maximum number of tasks
 #define RUNTIME_MAX_ARGS 16        // Maximum arguments per task
@@ -623,7 +618,6 @@ Kernel uses macros:
 - [src/platform/a2a3/aicpu/](src/platform/a2a3/aicpu/) - AICPU scheduler implementation
 - [src/platform/a2a3/aicore/](src/platform/a2a3/aicore/) - AICore kernel implementation
 - [src/platform/a2a3sim/](src/platform/a2a3sim/) - Thread-based simulation platform
-- [src/runtime/host_build_graph/](src/runtime/host_build_graph/) - Host-built graph runtime
-- [examples/host_build_graph_example/](examples/host_build_graph_example/) - Hardware example (a2a3)
-- [examples/host_build_graph_sim_example/](examples/host_build_graph_sim_example/) - Simulation example (a2a3sim)
+- [src/runtime/rt2/](src/runtime/rt2/) - Rt2 runtime
+- [examples/easyexample/](examples/easyexample/) - Example (a2a3 / a2a3sim)
 - [python/](python/) - Python bindings and compiler

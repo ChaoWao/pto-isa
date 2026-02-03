@@ -31,13 +31,12 @@ extern "C" __attribute__((visibility("default"))) int StaticTileFwkBackendKernel
  * @return 0 on success, -1 on error
  */
 extern "C" __attribute__((visibility("default"))) int DynTileFwkBackendKernelServerInit(void *arg) {
-    init_log_switch();
     if (arg == nullptr) {
-        DEV_ERROR("%s", "Invalid kernel arguments: null pointer");
         return -1;
     }
-
-    DEV_INFO("%s", "Runtime Executor Init: Initializing AICPU kernel");
+    // Disable dlog on Init to avoid CANN dlog crash before runtime is ready.
+    // init_log_switch();
+    // DEV_INFO("%s", "Runtime Executor Init: Initializing AICPU kernel");
     return 0;
 }
 

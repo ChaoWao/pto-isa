@@ -14,20 +14,20 @@ if [ "$OS" = "Darwin" ]; then
     # Mac: only run simulation
     echo "Mac detected, running simulation only..."
     python examples/scripts/run_example.py \
-        -k examples/host_build_graph_example/kernels \
-        -g examples/host_build_graph_example/golden.py \
-        -p a2a3sim
+        -k examples/easyexample/kernels \
+        -g examples/easyexample/golden.py \
+        -r rt2 -p a2a3sim
 else
     # Linux: run all platforms
     echo "Linux detected, running all platforms..."
     python examples/scripts/run_example.py \
-        -k examples/host_build_graph_example/kernels \
-        -g examples/host_build_graph_example/golden.py \
-        -p a2a3
+        -k examples/easyexample/kernels \
+        -g examples/easyexample/golden.py \
+        -r rt2 -p a2a3
     python examples/scripts/run_example.py \
-        -k examples/host_build_graph_example/kernels \
-        -g examples/host_build_graph_example/golden.py \
-        -p a2a3sim
+        -k examples/easyexample/kernels \
+        -g examples/easyexample/golden.py \
+        -r rt2 -p a2a3sim
 fi
 
 echo "All tests passed!"

@@ -11,10 +11,8 @@
 #include "runtime.h"
 #include "pto2_dispatch_payload.h"
 
-extern "C" {
 #include "pto_shared_memory.h"
 #include "pto_runtime2_types.h"
-}
 
 // Device orchestration entry (weak symbol in stub; user can override)
 extern "C" void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count);
