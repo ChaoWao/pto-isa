@@ -272,11 +272,10 @@ class CodeRunner:
     Args:
         kernels_dir: Path to kernels directory containing kernel_config.py
         golden_path: Path to golden.py script
-        runtime_name: Runtime implementation name (default: "host_build_graph")
+        runtime_name: Runtime implementation name (default: "rt2")
         device_id: Device ID (defaults to PTO_DEVICE_ID env var or 0)
         platform: Platform name ("a2a3" for hardware, "a2a3sim" for simulation, default: "a2a3")
-        use_device_orchestration: If True (rt2 only), orchestration runs on AICPU thread 3; host does not build graph. Deprecated in favor of orchestrator_location.
-        orchestrator_location: For rt2, "host_cpu" (orchestration on host, 3 AICPU threads) or "device_aicpu" (orchestration on AICPU thread 3, 4 threads). Ignored for non-rt2.
+        use_device_orchestration: If True (rt2 only), orchestration runs on AICPU thread 3; host does not build graph.
     """
 
     def __init__(
@@ -287,7 +286,6 @@ class CodeRunner:
         device_id: Optional[int] = None,
         platform: str = "a2a3",
         use_device_orchestration: bool = False,
-        orchestrator_location: Optional[str] = None,
     ):
         self.kernels_dir = Path(kernels_dir).resolve()
         self.golden_path = Path(golden_path).resolve()
@@ -295,19 +293,11 @@ class CodeRunner:
         self.platform = platform
         self.project_root = _get_project_root()
 
-        # Orchestrator: explicit choice or legacy use_device_orchestration
-        if orchestrator_location is not None:
-            if orchestrator_location not in ("host_cpu", "device_aicpu"):
-                raise ValueError(f"orchestrator_location must be 'host_cpu' or 'device_aicpu', got {orchestrator_location!r}")
-            self.orchestrator_location = orchestrator_location
-        else:
-            self.orchestrator_location = "device_aicpu" if use_device_orchestration else "host_cpu"
+        # Device orchestration flag (rt2 only)
         if runtime_name == "rt2":
-            self.use_device_orchestration = self.orchestrator_location == "device_aicpu"
-            self.run_orchestrator_on_host = self.orchestrator_location == "host_cpu"
+            self.use_device_orchestration = use_device_orchestration
         else:
             self.use_device_orchestration = False
-            self.run_orchestrator_on_host = False
 
         # Resolve device ID
         if device_id is None:
@@ -329,9 +319,9 @@ class CodeRunner:
         self.output_names = getattr(self._golden_module, '__outputs__', None)
         self.tensor_order = getattr(self._golden_module, 'TENSOR_ORDER', None)
 
-        # Runtime configuration: rt2 host_cpu -> 3 AICPU threads; rt2 device_aicpu -> 4; non-rt2 -> 3
-        if runtime_name == "rt2":
-            self.aicpu_thread_num = 3 if self.run_orchestrator_on_host else 4
+        # Runtime configuration: rt2 device_aicpu -> 4 AICPU threads; non-rt2/host -> 3
+        if runtime_name == "rt2" and self.use_device_orchestration:
+            self.aicpu_thread_num = 4
         else:
             self.aicpu_thread_num = 3
         self.block_dim = 3
@@ -519,87 +509,6 @@ class CodeRunner:
         to_free = [dev_a_i, dev_b_i, dev_c_i, dev_d_i, dev_e_i, sm_ptr_i]
         return func_args, to_free
 
-    def _build_func_args_host_orchestration(
-        self, tensors: Dict[str, np.ndarray]
-    ) -> Tuple[List[int], List[int]]:
-        """
-        Build func_args for host orchestration (rt2 run_orchestrator_on_host).
-
-        Same device tensor layout as device orchestration, but SM is allocated
-        via runtime.allocate_pto2_shared_memory() instead of Python device_malloc.
-        Caller must call allocate_pto2_shared_memory() and run_host_orchestration(host_mirror) after init.
-
-        Returns:
-            (func_args list, list of device pointers to free: dev_a, dev_b, dev_c, dev_d, dev_e; no sm_ptr)
-        """
-        import ctypes
-        from bindings import device_malloc, device_free, copy_to_device, copy_from_device
-
-        order = self.tensor_order if self.tensor_order else list(tensors.keys())
-        if len(order) < 3:
-            raise ValueError(
-                "Host orchestration expects at least 3 tensors (e.g. a, b, f). "
-                f"Got TENSOR_ORDER: {order}"
-            )
-        a_name, b_name, f_name = order[0], order[1], order[2]
-        for name in (a_name, b_name, f_name):
-            if name not in tensors:
-                raise KeyError(f"Tensor '{name}' not in tensors: {list(tensors.keys())}")
-        a_arr = tensors[a_name]
-        b_arr = tensors[b_name]
-        f_arr = tensors[f_name]
-        size_a = a_arr.nbytes
-        size_b = b_arr.nbytes
-        size_f = f_arr.nbytes
-        SIZE = int(a_arr.size)
-        BYTES = SIZE * 4  # float32
-
-        dev_a = device_malloc(size_a)
-        dev_b = device_malloc(size_b)
-        dev_f = device_malloc(size_f)
-        dev_c = device_malloc(BYTES)
-        dev_d = device_malloc(BYTES)
-        dev_e = device_malloc(BYTES)
-        if any(p is None for p in (dev_a, dev_b, dev_f, dev_c, dev_d, dev_e)):
-            for p in (dev_a, dev_b, dev_f, dev_c, dev_d, dev_e):
-                if p is not None:
-                    device_free(int(p))
-            raise RuntimeError("device_malloc failed for host orchestration")
-
-        dev_a_i = int(dev_a)
-        dev_b_i = int(dev_b)
-        dev_f_i = int(dev_f)
-        dev_c_i = int(dev_c)
-        dev_d_i = int(dev_d)
-        dev_e_i = int(dev_e)
-
-        copy_to_device(dev_a_i, a_arr.ctypes.data, size_a)
-        copy_to_device(dev_b_i, b_arr.ctypes.data, size_b)
-
-        if os.environ.get("PTO2_DEBUG_TENSOR"):
-            buf = (ctypes.c_uint8 * 16)()
-            copy_from_device(ctypes.addressof(buf), dev_a_i, 16)
-            print("[Host after copy] dev_a=0x%x first16=%s" % (dev_a_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_b_i, 16)
-            print("[Host after copy] dev_b=0x%x first16=%s" % (dev_b_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_f_i, 16)
-            print("[Host output] dev_f=0x%x first16 (before launch)=%s" % (dev_f_i, bytes(buf).hex()))
-
-        func_args = [
-            dev_a_i,
-            dev_b_i,
-            dev_f_i,
-            size_a,
-            size_b,
-            size_f,
-            SIZE,
-            dev_c_i,
-            dev_d_i,
-            dev_e_i,
-        ]
-        to_free = [dev_a_i, dev_b_i, dev_c_i, dev_d_i, dev_e_i]
-        return func_args, to_free
-
     def skip_if_no_env(self) -> None:
         """Raise error if required environment is not available."""
         if not _check_ascend_env():
@@ -717,13 +626,9 @@ class CodeRunner:
             print(f"Inputs: {list(inputs.keys())}")
             print(f"Outputs: {list(outputs.keys())}")
 
-            # Build func_args and optionally allocate device memory (device or host orchestration)
+            # Build func_args and optionally allocate device memory (device orchestration)
             device_ptrs_to_free: List[int] = []
-            if self.run_orchestrator_on_host:
-                func_args, device_ptrs_to_free = self._build_func_args_host_orchestration(
-                    tensors
-                )
-            elif self.use_device_orchestration:
+            if self.use_device_orchestration:
                 func_args, device_ptrs_to_free = self._build_func_args_device_orchestration(
                     tensors
                 )
@@ -737,9 +642,7 @@ class CodeRunner:
 
             # Create and initialize runtime
             print("\n=== Initializing Runtime ===")
-            if self.run_orchestrator_on_host:
-                print("Mode: host orchestration (graph built on host CPU, 3 AICPU threads)")
-            elif self.use_device_orchestration:
+            if self.use_device_orchestration:
                 print("Mode: device orchestration (AICPU thread 3 will build graph)")
             runtime = Runtime()
             runtime.initialize(
@@ -747,24 +650,8 @@ class CodeRunner:
                 self.orchestration["function_name"],
                 func_args,
                 use_device_orchestration=self.use_device_orchestration,
-                run_orchestrator_on_host=self.run_orchestrator_on_host,
             )
-            if self.run_orchestrator_on_host:
-                # Allocate PTO2 SM via runtime; run host orchestration into host mirror then copy to device
-                runtime.allocate_pto2_shared_memory()
-                sm_size = runtime.get_pto2_sm_size()
-                if sm_size <= 0:
-                    raise RuntimeError("get_pto2_sm_size returned invalid size")
-                host_mirror = (ctypes.c_uint8 * sm_size)()
-                runtime.run_host_orchestration(ctypes.addressof(host_mirror))
-                # Record output tensor for copy-back (same layout as device orchestration)
-                out_name = list(outputs.keys())[0]
-                host_f = tensors[out_name]
-                size_f = host_f.nbytes
-                dev_f = func_args[2]
-                host_f_ptr = int(host_f.ctypes.data) if hasattr(host_f.ctypes, "data") else host_f.__array_interface__["data"][0]
-                runtime.record_tensor_pair(host_f_ptr, dev_f, size_f)
-            elif self.use_device_orchestration:
+            if self.use_device_orchestration:
                 # Record output tensor for copy-back; set GM shared memory for AICPU thread 3
                 out_name = list(outputs.keys())[0]
                 host_f = tensors[out_name]
@@ -798,7 +685,7 @@ class CodeRunner:
             print("\n=== Finalizing Runtime ===")
             runtime.finalize()
 
-            if os.environ.get("PTO2_DEBUG_TENSOR") and (self.use_device_orchestration or self.run_orchestrator_on_host) and outputs:
+            if os.environ.get("PTO2_DEBUG_TENSOR") and self.use_device_orchestration and outputs:
                 out_name = list(outputs.keys())[0]
                 arr = tensors[out_name]
                 print("[Host output after copy-back] %s first16=%s" % (out_name, arr.tobytes()[:16].hex()))

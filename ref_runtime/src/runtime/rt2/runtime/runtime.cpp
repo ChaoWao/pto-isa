@@ -37,9 +37,6 @@ Runtime::Runtime() {
     tensor_pair_count = 0;
     orch_built_on_host_ = true;
     pto2_gm_sm_ptr_ = nullptr;
-    pto2_sm_size_ = 0;
-    pto2_gm_heap_ptr_ = nullptr;
-    pto2_gm_heap_size_ = 0;
     orch_args_ = nullptr;
     orch_arg_count_ = 0;
     use_pto2_dispatch_ = false;

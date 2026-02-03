@@ -127,7 +127,7 @@ void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
 
     /* Use C helpers so param layout (size at offset 20) matches orchestrator */
     enum { PTO2_PARAM_STRIDE = 24 };
-    static alignas(8) unsigned char params_t0_buf[3 * PTO2_PARAM_STRIDE];  /* static to avoid stack reuse */
+    static unsigned char params_t0_buf[3 * PTO2_PARAM_STRIDE] __attribute__((aligned(8)));  /* static to avoid stack reuse */
     pto2_param_set_input((PTO2TaskParam*)(params_t0_buf + 0),  dev_a, tile, sz);
     pto2_param_set_input((PTO2TaskParam*)(params_t0_buf + 24), dev_b, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t0_buf + 48), dev_c, tile, sz);
@@ -140,7 +140,7 @@ void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
         return;
     }
 
-    static alignas(8) unsigned char params_t1_buf[2 * PTO2_PARAM_STRIDE];
+    static unsigned char params_t1_buf[2 * PTO2_PARAM_STRIDE] __attribute__((aligned(8)));
     pto2_param_set_input((PTO2TaskParam*)(params_t1_buf + 0),  dev_c, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t1_buf + 24), dev_d, tile, sz);
     pto2_param_fix_sizes(params_t1_buf, 2, sz);
@@ -152,7 +152,7 @@ void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
         return;
     }
 
-    static alignas(8) unsigned char params_t2_buf[2 * PTO2_PARAM_STRIDE];
+    static unsigned char params_t2_buf[2 * PTO2_PARAM_STRIDE] __attribute__((aligned(8)));
     pto2_param_set_input((PTO2TaskParam*)(params_t2_buf + 0),  dev_c, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t2_buf + 24), dev_e, tile, sz);
     pto2_param_fix_sizes(params_t2_buf, 2, sz);
@@ -164,7 +164,7 @@ void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
         return;
     }
 
-    static alignas(8) unsigned char params_t3_buf[3 * PTO2_PARAM_STRIDE];
+    static unsigned char params_t3_buf[3 * PTO2_PARAM_STRIDE] __attribute__((aligned(8)));
     pto2_param_set_input((PTO2TaskParam*)(params_t3_buf + 0),  dev_d, tile, sz);
     pto2_param_set_input((PTO2TaskParam*)(params_t3_buf + 24), dev_e, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t3_buf + 48), dev_f, tile, sz);

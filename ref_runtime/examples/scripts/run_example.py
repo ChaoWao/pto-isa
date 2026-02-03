@@ -20,13 +20,9 @@ Examples:
     python examples/scripts/run_example.py -k examples/easyexample/kernels \\
         -g examples/easyexample/golden.py -r rt2 -p a2a3sim
 
-    # rt2 + host orchestration (default: graph built on host CPU)
-    python examples/scripts/run_example.py -k examples/easyexample/kernels \\
-        -g examples/easyexample/golden.py -r rt2 -p a2a3sim
-
     # rt2 + device orchestration (orchestrator on AICPU thread 3)
     python examples/scripts/run_example.py -k examples/easyexample/kernels \\
-        -g examples/easyexample/golden.py -r rt2 -p a2a3sim --orchestrator device_aicpu
+        -g examples/easyexample/golden.py -r rt2 -p a2a3sim -u
 
     # host_build_graph + simulation
     python examples/scripts/run_example.py -k examples/easyexample/kernels \\
@@ -103,14 +99,7 @@ Golden.py interface:
     parser.add_argument(
         "-u", "--use-device-orchestration",
         action="store_true",
-        help="(Deprecated) Equivalent to --orchestrator device_aicpu. Kept for backward compatibility."
-    )
-
-    parser.add_argument(
-        "--orchestrator",
-        choices=["host_cpu", "device_aicpu"],
-        default=None,
-        help="With -r rt2: run orchestrator on host CPU (host_cpu) or on AICPU thread 3 (device_aicpu). Default: host_cpu. Ignored for other runtimes."
+        help="(rt2 only) Run orchestration on AICPU thread 3 instead of loading SO on host."
     )
 
     parser.add_argument(
@@ -149,11 +138,6 @@ Golden.py interface:
         print(f"Error: kernel_config.py not found in {kernels_path}")
         return 1
 
-    # Orchestrator location for rt2: explicit --orchestrator or legacy -u
-    orchestrator = args.orchestrator
-    if orchestrator is None:
-        orchestrator = "device_aicpu" if getattr(args, "use_device_orchestration", False) else "host_cpu"
-
     # Import and run
     try:
         from code_runner import CodeRunner
@@ -165,7 +149,6 @@ Golden.py interface:
             device_id=args.device,
             platform=args.platform,
             use_device_orchestration=getattr(args, "use_device_orchestration", False),
-            orchestrator_location=orchestrator,
         )
 
         runner.run()

@@ -19,7 +19,6 @@
 
 // Forward declaration
 struct PTO2Runtime;
-struct PTO2ThreadContext;
 
 // =============================================================================
 // Worker Initialization

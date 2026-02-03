@@ -58,7 +58,6 @@ extern "C" {
  * @param func_args         Arguments for orchestration (host pointers, sizes, etc.)
  * @param func_args_count   Number of arguments
  * @param use_device_orchestration If true, orchestration runs on AICPU thread 3; do not call orch on host
- * @param run_orchestrator_on_host If true (rt2), orchestration runs on host CPU; caller allocates SM via allocate_pto2_shared_memory
  * @return 0 on success, -1 on failure
  */
 int init_runtime_impl(Runtime *runtime,
@@ -67,8 +66,7 @@ int init_runtime_impl(Runtime *runtime,
                     const char* orch_func_name,
                     uint64_t* func_args,
                     int func_args_count,
-                    int use_device_orchestration,
-                    int run_orchestrator_on_host) {
+                    int use_device_orchestration) {
     // Validate inputs
     if (runtime == nullptr) {
         std::cerr << "Error: Runtime pointer is null\n";
@@ -80,13 +78,6 @@ int init_runtime_impl(Runtime *runtime,
         runtime->set_orch_args(func_args, func_args_count);
         runtime->set_pto2_gm_sm_ptr(nullptr);  // Stub handles null; full impl allocates GM buffer later
         std::cout << "Device orchestration mode: orchestration will run on AICPU thread 3\n";
-        return 0;
-    }
-    if (run_orchestrator_on_host) {
-        // Host orchestration (rt2): do not load orch SO; host will call host_orchestration_entry after allocate_pto2_shared_memory
-        runtime->set_orch_built_on_host(true);  // so AICPU executor reads task count from SM and skips waiting for thread 3
-        runtime->set_orch_args(func_args, func_args_count);
-        std::cout << "Host orchestration mode: orchestration will run on host CPU; use allocate_pto2_shared_memory and run_host_orchestration\n";
         return 0;
     }
 

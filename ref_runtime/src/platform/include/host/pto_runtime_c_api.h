@@ -59,7 +59,6 @@ size_t get_runtime_size(void);
  * @param func_args         Arguments for orchestration (host pointers, sizes, etc.)
  * @param func_args_count   Number of arguments
  * @param use_device_orchestration If non-zero, orchestration runs on AICPU thread 3 (rt2 only)
- * @param run_orchestrator_on_host  If non-zero (rt2 only), orchestration runs on host CPU; SM allocated via allocate_pto2_shared_memory
  * @return 0 on success, -1 on failure
  */
 int init_runtime(RuntimeHandle runtime,
@@ -68,8 +67,7 @@ int init_runtime(RuntimeHandle runtime,
                 const char* orch_func_name,
                 uint64_t* func_args,
                 int func_args_count,
-                int use_device_orchestration,
-                int run_orchestrator_on_host);
+                int use_device_orchestration);
 
 /* ===========================================================================
  * Device Memory API (for use by orchestration functions)
@@ -179,25 +177,6 @@ void set_pto2_gm_sm_ptr(RuntimeHandle runtime, void* dev_ptr);
  * @return Size in bytes, or 0 if not available
  */
 int32_t get_pto2_sm_size(RuntimeHandle runtime);
-
-/**
- * Allocate PTO2 shared memory and heap via runtime host_api; set pto2_gm_sm_ptr.
- * Use when run_orchestrator_on_host: allocation is done through runtime.
- *
- * @param runtime  Initialized runtime handle (host_api must be set)
- * @return 0 on success, -1 on failure
- */
-int allocate_pto2_shared_memory(RuntimeHandle runtime);
-
-/**
- * Run host orchestration into host_mirror then copy to device SM.
- * Requires allocate_pto2_shared_memory() and set_orch_args() done.
- *
- * @param runtime      Initialized runtime handle
- * @param host_mirror  Host buffer of size get_pto2_sm_size(runtime)
- * @return 0 on success, -1 on failure
- */
-int run_host_orchestration(RuntimeHandle runtime, void* host_mirror);
 
 /**
  * Set device and create streams for memory operations.

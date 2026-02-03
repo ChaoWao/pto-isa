@@ -130,7 +130,7 @@ __aicore__ __attribute__((weak)) void aicore_execute(__gm__ Runtime* runtime, in
         // Device PTO2 mode: Handshake.task = PTO2DispatchPayload*; use execute_task_from_payload.
         // Host mode: Handshake.task = Task*; use execute_task.
         if (my_hank->task_status == 1 && my_hank->task != 0) {
-            if (runtime->get_use_pto2_dispatch()) {
+            if (runtime->use_pto2_dispatch_) {
                 __gm__ PTO2DispatchPayload* payload = reinterpret_cast<__gm__ PTO2DispatchPayload*>(my_hank->task);
                 execute_task_from_payload(payload);
             } else {

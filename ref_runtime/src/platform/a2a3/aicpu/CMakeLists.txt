@@ -32,12 +32,11 @@ endif()
 
 add_library(aicpu_kernel SHARED ${AICPU_KERNEL_SOURCES})
 
-# Compile options
+# Common compile options for both C and C++
 target_compile_options(aicpu_kernel
     PRIVATE
         -Wall
         -Wextra
-        -std=gnu++17
         -rdynamic
         -O3
         -fPIC
@@ -46,6 +45,16 @@ target_compile_options(aicpu_kernel
         -fno-common
         -g
 )
+
+# C++ specific options
+set_source_files_properties(${AICPU_KERNEL_SOURCES} PROPERTIES COMPILE_FLAGS "")
+foreach(SRC ${AICPU_KERNEL_SOURCES})
+    if(SRC MATCHES "\\.cpp$")
+        set_source_files_properties(${SRC} PROPERTIES COMPILE_FLAGS "-std=gnu++17")
+    elseif(SRC MATCHES "\\.c$")
+        set_source_files_properties(${SRC} PROPERTIES COMPILE_FLAGS "-std=gnu11")
+    endif()
+endforeach()
 
 # Platform definition
 target_compile_definitions(aicpu_kernel

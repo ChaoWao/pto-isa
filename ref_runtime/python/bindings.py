@@ -91,7 +91,6 @@ class RuntimeLibraryLoader:
             POINTER(c_uint64),      # func_args
             c_int,                  # func_args_count
             c_int,                  # use_device_orchestration
-            c_int,                  # run_orchestrator_on_host
         ]
         self.lib.init_runtime.restype = c_int
 
@@ -140,15 +139,9 @@ class RuntimeLibraryLoader:
         self.lib.set_pto2_gm_sm_ptr.argtypes = [c_void_p, c_void_p]
         self.lib.set_pto2_gm_sm_ptr.restype = None
 
-        # PTO2 host orchestration (rt2 run_orchestrator_on_host)
+        # PTO2 shared memory size (for device orchestration)
         self.lib.get_pto2_sm_size.argtypes = [c_void_p]
         self.lib.get_pto2_sm_size.restype = c_int32
-
-        self.lib.allocate_pto2_shared_memory.argtypes = [c_void_p]
-        self.lib.allocate_pto2_shared_memory.restype = c_int
-
-        self.lib.run_host_orchestration.argtypes = [c_void_p, c_void_p]
-        self.lib.run_host_orchestration.restype = c_int
 
 
 # ============================================================================
@@ -186,7 +179,6 @@ class Runtime:
         orch_func_name: str,
         func_args: Optional[List[int]] = None,
         use_device_orchestration: bool = False,
-        run_orchestrator_on_host: bool = False,
     ) -> None:
         """
 
@@ -205,7 +197,6 @@ class Runtime:
             orch_func_name: Name of the orchestration function to call
             func_args: Arguments for orchestration (host pointers, sizes, etc.)
             use_device_orchestration: If True (rt2 only), orchestration runs on AICPU thread 3
-            run_orchestrator_on_host: If True (rt2 only), orchestration runs on host CPU; use allocate_pto2_shared_memory and run_host_orchestration after init
 
         Raises:
             RuntimeError: If initialization fails
@@ -220,7 +211,7 @@ class Runtime:
         else:
             func_args_array = None
 
-        # Convert orch_so_binary to ctypes array (can be empty when use_device_orchestration or run_orchestrator_on_host)
+        # Convert orch_so_binary to ctypes array (can be empty when use_device_orchestration)
         orch_so_size = len(orch_so_binary) if orch_so_binary else 0
         orch_so_array = (c_uint8 * orch_so_size).from_buffer_copy(orch_so_binary) if orch_so_size else None
 
@@ -232,7 +223,6 @@ class Runtime:
             func_args_array,
             func_args_count,
             1 if use_device_orchestration else 0,
-            1 if run_orchestrator_on_host else 0,
         )
         if rc != 0:
             raise RuntimeError(f"init_runtime failed: {rc}")
@@ -270,45 +260,12 @@ class Runtime:
 
     def get_pto2_sm_size(self) -> int:
         """
-        Get required PTO2 shared memory size in bytes (same for host mirror).
-
-        Used when run_orchestrator_on_host: allocate a host buffer of this size
-        and pass it to run_host_orchestration().
+        Get required PTO2 shared memory size in bytes.
 
         Returns:
             Size in bytes, or 0 if not available
         """
         return int(self.lib.get_pto2_sm_size(self._handle))
-
-    def allocate_pto2_shared_memory(self) -> None:
-        """
-        Allocate PTO2 shared memory and heap via runtime host_api; set pto2_gm_sm_ptr.
-
-        Call when run_orchestrator_on_host after initialize() and before run_host_orchestration().
-
-        Raises:
-            RuntimeError: If allocation fails
-        """
-        rc = self.lib.allocate_pto2_shared_memory(self._handle)
-        if rc != 0:
-            raise RuntimeError(f"allocate_pto2_shared_memory failed: {rc}")
-
-    def run_host_orchestration(self, host_mirror_ptr: int) -> None:
-        """
-        Run host orchestration into host_mirror then copy to device SM.
-
-        Requires allocate_pto2_shared_memory() and set_orch_args (via initialize with func_args) done.
-        host_mirror_ptr must point to a buffer of size get_pto2_sm_size().
-
-        Args:
-            host_mirror_ptr: Host buffer address (e.g. ctypes buffer or numpy array .ctypes.data)
-
-        Raises:
-            RuntimeError: If orchestration or copy fails
-        """
-        rc = self.lib.run_host_orchestration(self._handle, ctypes.c_void_p(host_mirror_ptr))
-        if rc != 0:
-            raise RuntimeError(f"run_host_orchestration failed: {rc}")
 
     def finalize(self) -> None:
         """

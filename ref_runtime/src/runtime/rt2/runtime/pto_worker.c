@@ -228,12 +228,12 @@ int32_t pto2_worker_get_task(PTO2WorkerContext* worker) {
         __atomic_store_n(&ctx->worker_waiting[worker->worker_id], true, __ATOMIC_RELEASE);
         
         pthread_mutex_lock(mutex);
-        
+
         // Wait while:
         // 1. Queue is empty, OR
         // 2. Queue has tasks but another waiting worker has smaller clock
         // Use timed wait to avoid lost signals causing permanent waits
-        struct timespec timeout;
+        (void)0;  // placeholder for removed timeout variable
         while (!worker->shutdown) {
             if (pto2_ready_queue_empty(queue)) {
                 // Queue empty - wait for task
@@ -249,7 +249,7 @@ int32_t pto2_worker_get_task(PTO2WorkerContext* worker) {
                     start_id = ctx->num_cube_workers;
                     end_id = ctx->num_cube_workers + ctx->num_vector_workers;
                 }
-                int64_t my_clock = PTO2_LOAD_ACQUIRE(&ctx->worker_current_cycle[worker->worker_id]);
+                (void)PTO2_LOAD_ACQUIRE(&ctx->worker_current_cycle[worker->worker_id]);  // my_clock - unused but kept for documentation
                 // Find global min clock
                 int64_t global_min = INT64_MAX;
                 for (int32_t i = start_id; i < end_id; i++) {
@@ -583,8 +583,8 @@ void* pto2_worker_thread_func_sim(void* arg) {
 // =============================================================================
 
 void pto2_worker_print_stats(PTO2WorkerContext* worker) {
-    printf("Worker %d (%s):\n", worker->worker_id, 
-           pto2_worker_type_name(worker->worker_type));
+    printf("Worker %d (%s):\n", worker->worker_id,
+           pto2_worker_type_name((PTO2WorkerType)worker->worker_type));
     printf("  Tasks executed:     %lld\n", (long long)worker->tasks_executed);
     printf("  Total cycles:       %lld\n", (long long)worker->total_cycles);
     printf("  Total stall cycles: %lld\n", (long long)worker->total_stall_cycles);
