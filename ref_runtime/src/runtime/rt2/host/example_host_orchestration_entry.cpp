@@ -124,7 +124,7 @@ extern "C" void host_orchestration_entry(void* host_sm_mirror, uint64_t* args, i
     pto2_param_set_input((PTO2TaskParam*)(params_t0_buf + 24), dev_b, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t0_buf + 48), dev_c, tile, sz);
     pto2_param_fix_sizes(params_t0_buf, 3, sz);
-    if (pto2_rt_submit_task(rt, 0, PTO2_WORKER_VECTOR, nullptr, "kernel_add", (PTO2TaskParam*)params_t0_buf, 3) < 0) {
+    if (pto2_rt_submit_task(rt, 0, PTO2_WORKER_VECTOR, (PTO2TaskParam*)params_t0_buf, 3) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
         pto2_runtime_destroy(rt);
@@ -136,7 +136,7 @@ extern "C" void host_orchestration_entry(void* host_sm_mirror, uint64_t* args, i
     pto2_param_set_input((PTO2TaskParam*)(params_t1_buf + 0),  dev_c, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t1_buf + 24), dev_d, tile, sz);
     pto2_param_fix_sizes(params_t1_buf, 2, sz);
-    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, nullptr, "kernel_add_scalar", (PTO2TaskParam*)params_t1_buf, 2) < 0) {
+    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, (PTO2TaskParam*)params_t1_buf, 2) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
         pto2_runtime_destroy(rt);
@@ -148,7 +148,7 @@ extern "C" void host_orchestration_entry(void* host_sm_mirror, uint64_t* args, i
     pto2_param_set_input((PTO2TaskParam*)(params_t2_buf + 0),  dev_c, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t2_buf + 24), dev_e, tile, sz);
     pto2_param_fix_sizes(params_t2_buf, 2, sz);
-    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, nullptr, "kernel_add_scalar", (PTO2TaskParam*)params_t2_buf, 2) < 0) {
+    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, (PTO2TaskParam*)params_t2_buf, 2) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
         pto2_runtime_destroy(rt);
@@ -161,7 +161,7 @@ extern "C" void host_orchestration_entry(void* host_sm_mirror, uint64_t* args, i
     pto2_param_set_input((PTO2TaskParam*)(params_t3_buf + 24), dev_e, tile, sz);
     pto2_param_set_output((PTO2TaskParam*)(params_t3_buf + 48), dev_f, tile, sz);
     pto2_param_fix_sizes(params_t3_buf, 3, sz);
-    int32_t task3_id = pto2_rt_submit_task(rt, 2, PTO2_WORKER_VECTOR, nullptr, "kernel_mul", (PTO2TaskParam*)params_t3_buf, 3);
+    int32_t task3_id = pto2_rt_submit_task(rt, 2, PTO2_WORKER_VECTOR, (PTO2TaskParam*)params_t3_buf, 3);
     if (task3_id < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);

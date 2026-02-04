@@ -17,7 +17,7 @@
 ### 1.2 输入与执行流
 
 - **输入**：
-  - **编排函数**：控制流 + 任务提交（Host 上由 `build_example_graph` 等通过 SO 调用，或设备上由 `aicpu_orchestration_entry` 在 AICPU 线程 3 执行）。
+  - **编排函数**：控制流 + 任务提交（Host 上或设备上由 `aicpu_orchestration_entry` 等通过 SO 调用执行）。
   - **InCore 内核**：编译为 AICore/AIV 的 kernel，通过 `function_bin_addr` 在 GM 中按统一签名 `void kernel(__gm__ int64_t* args)` 调度。
 - **执行流**（设备编排模式）：
   1. Host：分配设备内存、拷贝输入、启动 AICPU 线程（含 1 个 Orchestrator 线程 + 若干 Scheduler 线程）。

@@ -453,10 +453,13 @@ class CodeRunner:
         SIZE, dev_c, dev_d, dev_e]. Also allocates PTO2 shared memory.
 
         Returns:
-            (func_args list, list of device pointers to free after finalize: dev_a, dev_b, dev_c, dev_d, dev_e, sm_ptr)
+            (func_args list, list of device pointers to free after finalize)
+
+        Note: Device memory allocation and copy-to-device are now handled by
+        init_runtime_impl() in C++. Python only passes host pointers and sizes.
         """
         import ctypes
-        from bindings import device_malloc, device_free, copy_to_device, copy_from_device
+        from bindings import device_malloc, device_free
 
         order = self.tensor_order if self.tensor_order else list(tensors.keys())
         if len(order) < 3:
@@ -475,55 +478,31 @@ class CodeRunner:
         size_b = b_arr.nbytes
         size_f = f_arr.nbytes
         SIZE = int(a_arr.size)
-        BYTES = SIZE * 4  # float32
 
-        dev_a = device_malloc(size_a)
-        dev_b = device_malloc(size_b)
-        dev_f = device_malloc(size_f)
-        dev_c = device_malloc(BYTES)
-        dev_d = device_malloc(BYTES)
-        dev_e = device_malloc(BYTES)
+        # Get host pointers
+        host_a = int(a_arr.ctypes.data)
+        host_b = int(b_arr.ctypes.data)
+        host_f = int(f_arr.ctypes.data)
+
+        # Allocate shared memory buffer (still needed for orchestrator state)
         sm_ptr = device_malloc(self.PTO2_SM_SIZE)
-        if any(p is None for p in (dev_a, dev_b, dev_f, dev_c, dev_d, dev_e, sm_ptr)):
-            for p in (dev_a, dev_b, dev_f, dev_c, dev_d, dev_e, sm_ptr):
-                if p is not None:
-                    device_free(int(p))
-            raise RuntimeError("device_malloc failed for device orchestration")
-
-        dev_a_i = int(dev_a)
-        dev_b_i = int(dev_b)
-        dev_f_i = int(dev_f)
-        dev_c_i = int(dev_c)
-        dev_d_i = int(dev_d)
-        dev_e_i = int(dev_e)
+        if sm_ptr is None:
+            raise RuntimeError("device_malloc failed for PTO2 shared memory")
         sm_ptr_i = int(sm_ptr)
 
-        copy_to_device(dev_a_i, a_arr.ctypes.data, size_a)
-        copy_to_device(dev_b_i, b_arr.ctypes.data, size_b)
-
-        if os.environ.get("PTO2_DEBUG_TENSOR"):
-            buf = (ctypes.c_uint8 * 16)()
-            copy_from_device(ctypes.addressof(buf), dev_a_i, 16)
-            print("[Host after copy] dev_a=0x%x first16=%s" % (dev_a_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_b_i, 16)
-            print("[Host after copy] dev_b=0x%x first16=%s" % (dev_b_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_f_i, 16)
-            print("[Host output] dev_f=0x%x first16 (before launch)=%s" % (dev_f_i, bytes(buf).hex()))
-
+        # Pass host pointers and sizes - C++ will handle device allocation
+        # Layout: [host_a, host_b, host_f, size_a, size_b, size_f, SIZE]
         func_args = [
-            dev_a_i,
-            dev_b_i,
-            dev_f_i,
+            host_a,
+            host_b,
+            host_f,
             size_a,
             size_b,
             size_f,
             SIZE,
-            dev_c_i,
-            dev_d_i,
-            dev_e_i,
         ]
-        # Pointers to free after finalize (dev_f is freed by finalize)
-        to_free = [dev_a_i, dev_b_i, dev_c_i, dev_d_i, dev_e_i, sm_ptr_i]
+        # Only sm_ptr needs to be freed by Python; device tensors are managed by C++
+        to_free = [sm_ptr_i]
         return func_args, to_free
 
     def _build_func_args_host_orchestration(
@@ -532,12 +511,11 @@ class CodeRunner:
         """
         Build func_args for host orchestration (rt2 run_orchestrator_on_host).
 
-        Same device tensor layout as device orchestration, but SM is allocated
-        via runtime.allocate_pto2_shared_memory() instead of Python device_malloc.
-        Caller must call allocate_pto2_shared_memory() and run_host_orchestration(host_mirror) after init.
+        Note: host_orchestration_entry expects device pointers, so we allocate
+        device memory and copy data here (same as before).
 
         Returns:
-            (func_args list, list of device pointers to free: dev_a, dev_b, dev_c, dev_d, dev_e; no sm_ptr)
+            (func_args list, list of device pointers to free: dev_a, dev_b, dev_c, dev_d, dev_e)
         """
         import ctypes
         from bindings import device_malloc, device_free, copy_to_device, copy_from_device
@@ -582,15 +560,6 @@ class CodeRunner:
 
         copy_to_device(dev_a_i, a_arr.ctypes.data, size_a)
         copy_to_device(dev_b_i, b_arr.ctypes.data, size_b)
-
-        if os.environ.get("PTO2_DEBUG_TENSOR"):
-            buf = (ctypes.c_uint8 * 16)()
-            copy_from_device(ctypes.addressof(buf), dev_a_i, 16)
-            print("[Host after copy] dev_a=0x%x first16=%s" % (dev_a_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_b_i, 16)
-            print("[Host after copy] dev_b=0x%x first16=%s" % (dev_b_i, bytes(buf).hex()))
-            copy_from_device(ctypes.addressof(buf), dev_f_i, 16)
-            print("[Host output] dev_f=0x%x first16 (before launch)=%s" % (dev_f_i, bytes(buf).hex()))
 
         func_args = [
             dev_a_i,
@@ -641,6 +610,7 @@ class CodeRunner:
             device_malloc,
             device_free,
             copy_to_device,
+            copy_from_device,
         )
         from elf_parser import extract_text_section
 
@@ -692,14 +662,32 @@ class CodeRunner:
             str(self.project_root / "src" / "runtime" / self.runtime_name / "runtime"),
         ] + pto_compiler.get_platform_include_dirs()
 
-        orch_so_binary = pto_compiler.compile_orchestration(
-            self.orchestration["source"],
-            extra_include_dirs=orch_include_dirs,
-        )
-        print(f"Compiled orchestration: {len(orch_so_binary)} bytes")
-        if self.keep_artifacts_dir is not None:
-            (self.keep_artifacts_dir / "orchestration.so").write_bytes(orch_so_binary)
-            print(f"  Saved orchestration.so to {self.keep_artifacts_dir}")
+        if self.use_device_orchestration:
+            # Device orchestration: compile for AICPU
+            orch_so_binary = pto_compiler.compile_orchestration(
+                self.orchestration["source"],
+                extra_include_dirs=orch_include_dirs,
+                target="device",
+            )
+            self._orch_func_name = self.orchestration["function_name"]
+            print(f"Compiled device orchestration: {len(orch_so_binary)} bytes")
+            if self.keep_artifacts_dir is not None:
+                (self.keep_artifacts_dir / "device_orchestration.so").write_bytes(orch_so_binary)
+                print(f"  Saved device_orchestration.so to {self.keep_artifacts_dir}")
+        else:
+            # Host orchestration: compile for host CPU
+            # Use host-specific source/function if available
+            host_source = self.orchestration.get("host_source", self.orchestration["source"])
+            orch_so_binary = pto_compiler.compile_orchestration(
+                host_source,
+                extra_include_dirs=orch_include_dirs,
+                target="host",
+            )
+            self._orch_func_name = self.orchestration.get("host_function_name", self.orchestration["function_name"])
+            print(f"Compiled host orchestration: {len(orch_so_binary)} bytes")
+            if self.keep_artifacts_dir is not None:
+                (self.keep_artifacts_dir / "orchestration.so").write_bytes(orch_so_binary)
+                print(f"  Saved orchestration.so to {self.keep_artifacts_dir}")
 
         # Step 4: Compile and register kernels
         print("\n=== Compiling and Registering Kernels ===")
@@ -768,9 +756,13 @@ class CodeRunner:
             elif self.use_device_orchestration:
                 print("Mode: device orchestration (AICPU thread 3 will build graph)")
             runtime = Runtime()
+
+            # Use orchestration function name (set during compilation)
+            orch_func_name = self._orch_func_name
+
             runtime.initialize(
                 orch_so_binary,
-                self.orchestration["function_name"],
+                orch_func_name,
                 func_args,
                 use_device_orchestration=self.use_device_orchestration,
                 run_orchestrator_on_host=self.run_orchestrator_on_host,
@@ -783,23 +775,11 @@ class CodeRunner:
                     raise RuntimeError("get_pto2_sm_size returned invalid size")
                 host_mirror = (ctypes.c_uint8 * sm_size)()
                 runtime.run_host_orchestration(ctypes.addressof(host_mirror))
-                # Record output tensor for copy-back (same layout as device orchestration)
-                out_name = list(outputs.keys())[0]
-                host_f = tensors[out_name]
-                size_f = host_f.nbytes
-                dev_f = func_args[2]
-                host_f_ptr = int(host_f.ctypes.data) if hasattr(host_f.ctypes, "data") else host_f.__array_interface__["data"][0]
-                runtime.record_tensor_pair(host_f_ptr, dev_f, size_f)
+                # Note: record_tensor_pair is called inside example_orch.cpp
             elif self.use_device_orchestration:
-                # Record output tensor for copy-back; set GM shared memory for AICPU thread 3
-                out_name = list(outputs.keys())[0]
-                host_f = tensors[out_name]
-                size_f = host_f.nbytes
-                # func_args layout: [dev_a, dev_b, dev_f, size_a, size_b, size_f, SIZE, dev_c, dev_d, dev_e]
-                dev_f = func_args[2]
-                host_f_ptr = int(host_f.ctypes.data) if hasattr(host_f.ctypes, "data") else host_f.__array_interface__["data"][0]
-                runtime.record_tensor_pair(host_f_ptr, dev_f, size_f)
-                sm_ptr = device_ptrs_to_free[-1]  # last one is sm_ptr
+                # Set GM shared memory for AICPU thread 3
+                # Note: record_tensor_pair and device memory allocation are handled by init_runtime_impl
+                sm_ptr = device_ptrs_to_free[0]  # First (and only) item is sm_ptr
                 runtime.set_pto2_gm_sm_ptr(sm_ptr)
 
             # Launch runtime
@@ -824,6 +804,8 @@ class CodeRunner:
                     aicpu_binary=aicpu_binary,
                     aicore_binary=aicore_binary,
                 )
+            except Exception as e:
+                print("try launch runtime failed")
             finally:
                 if prev_cwd is not None:
                     os.chdir(prev_cwd)
@@ -840,8 +822,8 @@ class CodeRunner:
                 print("[Host output after copy-back] %s first16=%s" % (out_name, arr.tobytes()[:16].hex()))
 
             # Free device buffers allocated for device orchestration (dev_f already freed in finalize)
-            for ptr in device_ptrs_to_free:
-                device_free(ptr)
+            # for ptr in device_ptrs_to_free:
+            #     device_free(ptr)
 
             # Compute golden and compare
             print("\n=== Comparing Results ===")

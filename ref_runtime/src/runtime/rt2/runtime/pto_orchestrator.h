@@ -1,17 +1,17 @@
 /**
  * PTO Runtime2 - Orchestrator Interface
- * 
+ *
  * The Orchestrator is responsible for:
  * 1. Executing the orchestration function (Turing-complete control flow)
  * 2. Allocating intermediate buffers from the heap
  * 3. Submitting tasks via async InCore function calls
  * 4. Building the dependency graph using TensorMap
  * 5. Managing buffer scopes for lifecycle control
- * 
+ *
  * The Orchestrator can run on either:
  * - Host CPU (lower latency for complex control, easier debugging)
  * - Device AI_CPU (lower latency for task submission)
- * 
+ *
  * Based on: docs/runtime_buffer_manager_methods.md
  */
 
@@ -30,43 +30,43 @@
 
 /**
  * Orchestrator state structure (private to Orchestrator)
- * 
+ *
  * Contains all state needed for task graph construction and buffer management.
  */
 typedef struct {
     // === SHARED MEMORY ACCESS ===
     PTO2SharedMemoryHandle* sm_handle;
-    
+
     // === RING BUFFERS ===
     PTO2HeapRing    heap_ring;      // Output buffer allocation
     PTO2TaskRing    task_ring;      // Task slot allocation
     PTO2DepListPool dep_pool;       // Dependency list allocation
-    
+
     // === TENSOR MAP (Private) ===
     PTO2TensorMap   tensor_map;     // Producer lookup
     int32_t         tensormap_last_cleanup;  // Last cleanup threshold
-    
+
     // === SCOPE STACK (Private) ===
     int32_t*        scope_stack;    // Stack of scope begin positions
     int32_t         scope_stack_top;// Current top of stack (-1 = empty)
     int32_t         scope_stack_capacity;
-    
+
     // === SCHEDULER REFERENCE ===
     // Note: In simulated mode, orchestrator and scheduler share address space
     // In real mode, they communicate via shared memory only
     PTO2SchedulerState* scheduler;  // For simulated mode only
     bool init_task_on_submit;       // If true, call scheduler_init_task on submit
-    
+
     // === GM HEAP (for output buffers) ===
     void*           gm_heap_base;   // Base address of GM heap
     int32_t         gm_heap_size;   // Size of GM heap
-    
+
     // === STATISTICS ===
     int64_t         tasks_submitted;
     int64_t         buffers_allocated;
     int64_t         bytes_allocated;
     int64_t         scope_depth_max;
-    
+
 } PTO2OrchestratorState;
 
 // =============================================================================
@@ -75,7 +75,7 @@ typedef struct {
 
 /**
  * Initialize orchestrator state
- * 
+ *
  * @param orch       Orchestrator state to initialize
  * @param sm_handle  Shared memory handle
  * @param gm_heap    GM heap memory for output buffers
@@ -105,7 +105,7 @@ void pto2_orchestrator_set_scheduler(PTO2OrchestratorState* orch,
 
 /**
  * Set scheduler reference with mode control
- * 
+ *
  * @param orch           Orchestrator state
  * @param scheduler      Scheduler state
  * @param init_on_submit If true, init task on submit (single-threaded mode)
@@ -121,7 +121,7 @@ void pto2_orchestrator_set_scheduler_mode(PTO2OrchestratorState* orch,
 
 /**
  * Begin a new scope
- * 
+ *
  * Pushes current task index to scope stack.
  * All buffers allocated within this scope will have their fanout_count
  * initialized to include this scope reference.
@@ -130,7 +130,7 @@ void pto2_scope_begin(PTO2OrchestratorState* orch);
 
 /**
  * End current scope
- * 
+ *
  * Pops scope stack and increments fanout_refcount for all tasks
  * in [scope_begin_pos, current_task_index).
  * May trigger buffer release for tasks that are now fully consumed.
@@ -151,7 +151,7 @@ static inline int32_t pto2_get_scope_depth(PTO2OrchestratorState* orch) {
 
 /**
  * Submit a task with InCore function and parameters
- * 
+ *
  * This is the main API for building the task graph:
  * 1. Allocates task slot from TaskRing (may stall)
  * 2. Allocates packed output buffer from HeapRing (may stall)
@@ -159,12 +159,12 @@ static inline int32_t pto2_get_scope_depth(PTO2OrchestratorState* orch) {
  * 4. Updates producer's fanout_count/list (with spinlock)
  * 5. Registers outputs in TensorMap
  * 6. Initializes task state in scheduler
- * 
+ *
+ * The function address is resolved via kernel_id when the task is dispatched.
+ *
  * @param orch        Orchestrator state
- * @param kernel_id   InCore function ID
+ * @param kernel_id   InCore function ID (used to look up function address)
  * @param worker_type Target worker type (CUBE, VECTOR, AI_CPU, ACCELERATOR)
- * @param func_ptr    Function pointer (optional)
- * @param func_name   Function name (for debugging)
  * @param params      Array of task parameters
  * @param num_params  Number of parameters
  * @return Task ID, or -1 on failure
@@ -172,21 +172,19 @@ static inline int32_t pto2_get_scope_depth(PTO2OrchestratorState* orch) {
 int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                           int32_t kernel_id,
                           PTO2WorkerType worker_type,
-                          void* func_ptr,
-                          const char* func_name,
                           PTO2TaskParam* params,
                           int32_t num_params);
 
 /**
  * Get pointer to specific output of a task
- * 
+ *
  * @param orch       Orchestrator state
  * @param task_id    Task ID
  * @param output_idx Output index (0-based)
  * @return Pointer to output buffer
  */
-void* pto2_task_get_output(PTO2OrchestratorState* orch, 
-                            int32_t task_id, 
+void* pto2_task_get_output(PTO2OrchestratorState* orch,
+                            int32_t task_id,
                             int32_t output_idx);
 
 // =============================================================================
@@ -195,14 +193,14 @@ void* pto2_task_get_output(PTO2OrchestratorState* orch,
 
 /**
  * Mark orchestration as complete
- * 
+ *
  * Signals to scheduler that no more tasks will be submitted.
  */
 void pto2_orchestrator_done(PTO2OrchestratorState* orch);
 
 /**
  * Wait for all tasks to complete
- * 
+ *
  * Blocks until scheduler reports all tasks consumed.
  * Only valid in simulated mode or with shared address space.
  */
@@ -219,7 +217,7 @@ bool pto2_orchestrator_has_space(PTO2OrchestratorState* orch);
 
 /**
  * Sync TensorMap validity threshold from shared memory
- * 
+ *
  * Called periodically to refresh the lazy invalidation threshold.
  * Also triggers cleanup if threshold has advanced significantly.
  */

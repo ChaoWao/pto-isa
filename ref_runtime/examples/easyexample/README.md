@@ -134,8 +134,8 @@ KERNELS = [
 ]
 
 ORCHESTRATION = {
-    "source": ".../example_orch.cpp",
-    "function_name": "build_example_graph"
+    "source": ".../example_aicpu_orchestration_entry_skeleton.cpp",
+    "function_name": "aicpu_orchestration_entry"
 }
 ```
 

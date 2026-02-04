@@ -75,11 +75,117 @@ int init_runtime_impl(Runtime *runtime,
         return -1;
     }
     if (use_device_orchestration) {
-        // Device orchestration: do not load orch SO; thread 3 will call aicpu_orchestration_entry
+        // Device orchestration: host allocates device memory, copies data,
+        // then passes device pointers to AICPU thread 3 via orch_args
         runtime->set_orch_built_on_host(false);
-        runtime->set_orch_args(func_args, func_args_count);
-        runtime->set_pto2_gm_sm_ptr(nullptr);  // Stub handles null; full impl allocates GM buffer later
-        std::cout << "Device orchestration mode: orchestration will run on AICPU thread 3\n";
+
+        if (orch_so_binary == nullptr || orch_so_size == 0) {
+            std::cerr << "Error: Device orchestration SO is required\n";
+            return -1;
+        }
+
+        // Copy SO binary to device memory (AICPU cannot access host memory)
+        void* dev_so = runtime->host_api.device_malloc(orch_so_size);
+        if (!dev_so) {
+            std::cerr << "Error: Failed to allocate device memory for orchestration SO\n";
+            return -1;
+        }
+        runtime->host_api.copy_to_device(dev_so, orch_so_binary, orch_so_size);
+        runtime->set_device_orch_so(reinterpret_cast<const uint8_t*>(dev_so), orch_so_size);
+        // Record for cleanup (no copy-back needed)
+        runtime->record_tensor_pair(nullptr, dev_so, orch_so_size);
+
+        std::cout << "Device orchestration mode: SO (" << orch_so_size
+                  << " bytes) copied to device memory\n";
+        std::cout.flush();
+
+        // Expected args: [host_a, host_b, host_f, size_a, size_b, size_f, SIZE]
+        if (func_args_count < 7) {
+            std::cerr << "Error: Device orchestration expects at least 7 args, got "
+                      << func_args_count << "\n";
+            return -1;
+        }
+
+        void* host_a = reinterpret_cast<void*>(func_args[0]);
+        void* host_b = reinterpret_cast<void*>(func_args[1]);
+        void* host_f = reinterpret_cast<void*>(func_args[2]);
+        size_t size_a = static_cast<size_t>(func_args[3]);
+        size_t size_b = static_cast<size_t>(func_args[4]);
+        size_t size_f = static_cast<size_t>(func_args[5]);
+        int SIZE = static_cast<int>(func_args[6]);
+        size_t BYTES = SIZE * sizeof(float);
+
+        std::cout << "Device orchestration: Allocating device memory...\n";
+        std::cout << "  size_a=" << size_a << " size_b=" << size_b << " size_f=" << size_f
+                  << " SIZE=" << SIZE << "\n";
+        std::cout.flush();
+
+        // Allocate device memory for inputs, outputs, and intermediates
+        void* dev_a = runtime->host_api.device_malloc(size_a);
+        void* dev_b = runtime->host_api.device_malloc(size_b);
+        void* dev_f = runtime->host_api.device_malloc(size_f);
+        void* dev_c = runtime->host_api.device_malloc(BYTES);
+        void* dev_d = runtime->host_api.device_malloc(BYTES);
+        void* dev_e = runtime->host_api.device_malloc(BYTES);
+
+        if (!dev_a || !dev_b || !dev_f || !dev_c || !dev_d || !dev_e) {
+            std::cerr << "Error: Failed to allocate device memory for device orchestration\n";
+            if (dev_a) runtime->host_api.device_free(dev_a);
+            if (dev_b) runtime->host_api.device_free(dev_b);
+            if (dev_f) runtime->host_api.device_free(dev_f);
+            if (dev_c) runtime->host_api.device_free(dev_c);
+            if (dev_d) runtime->host_api.device_free(dev_d);
+            if (dev_e) runtime->host_api.device_free(dev_e);
+            return -1;
+        }
+
+        // Copy input data to device
+        runtime->host_api.copy_to_device(dev_a, host_a, size_a);
+        runtime->host_api.copy_to_device(dev_b, host_b, size_b);
+        std::cout << "  Copied inputs to device\n";
+
+        // Record output tensor for copy-back during finalize
+        runtime->record_tensor_pair(host_f, dev_f, size_f);
+
+        // Record device-only allocations for cleanup (no copy-back)
+        runtime->record_tensor_pair(nullptr, dev_a, size_a);
+        runtime->record_tensor_pair(nullptr, dev_b, size_b);
+        runtime->record_tensor_pair(nullptr, dev_c, BYTES);
+        runtime->record_tensor_pair(nullptr, dev_d, BYTES);
+        runtime->record_tensor_pair(nullptr, dev_e, BYTES);
+
+        // Allocate GM heap for orchestrator output buffers (must persist until tasks complete)
+        // Need enough space for all task outputs; 4 tasks * 65536 bytes each = 256KB minimum
+        // Use 512KB for safety margin
+        const size_t GM_HEAP_SIZE = 512 * 1024;  // 512KB
+        void* gm_heap = runtime->host_api.device_malloc(GM_HEAP_SIZE);
+        if (!gm_heap) {
+            std::cerr << "Error: Failed to allocate GM heap for device orchestration\n";
+            // Note: already recorded tensor pairs will be freed in validate_runtime_impl
+            return -1;
+        }
+        runtime->record_tensor_pair(nullptr, gm_heap, GM_HEAP_SIZE);
+
+        // Build new args with device pointers
+        // Layout: [dev_a, dev_b, dev_f, size_a, size_b, size_f, SIZE, dev_c, dev_d, dev_e, gm_heap, heap_size]
+        static uint64_t device_args[12];  // Static to persist beyond function scope
+        device_args[0] = reinterpret_cast<uint64_t>(dev_a);
+        device_args[1] = reinterpret_cast<uint64_t>(dev_b);
+        device_args[2] = reinterpret_cast<uint64_t>(dev_f);
+        device_args[3] = size_a;
+        device_args[4] = size_b;
+        device_args[5] = size_f;
+        device_args[6] = SIZE;
+        device_args[7] = reinterpret_cast<uint64_t>(dev_c);
+        device_args[8] = reinterpret_cast<uint64_t>(dev_d);
+        device_args[9] = reinterpret_cast<uint64_t>(dev_e);
+        device_args[10] = reinterpret_cast<uint64_t>(gm_heap);
+        device_args[11] = GM_HEAP_SIZE;
+
+        runtime->set_orch_args(device_args, 12);
+        runtime->set_pto2_gm_sm_ptr(nullptr);  // Caller sets via set_pto2_gm_sm_ptr after allocating SM
+
+        std::cout << "Device orchestration: Ready for AICPU execution\n";
         return 0;
     }
     if (run_orchestrator_on_host) {
@@ -184,20 +290,59 @@ int validate_runtime_impl(Runtime *runtime) {
     TensorPair* tensor_pairs = runtime->get_tensor_pairs();
     int tensor_pair_count = runtime->get_tensor_pair_count();
 
-    // PTO2 (device or host orchestration): graph output may be in packed buffer; copy from graph_output_ptr when set
-    void* pto2_sm = runtime->get_pto2_gm_sm_ptr();
-    PTO2SharedMemoryHeader* pto2_header = pto2_sm ? static_cast<PTO2SharedMemoryHeader*>(pto2_sm) : nullptr;
-    uint64_t graph_out_ptr = pto2_header ? pto2_header->graph_output_ptr : 0;
-    int32_t graph_out_size = pto2_header ? pto2_header->graph_output_size : 0;
+    std::cout << "Tensor pairs to copy: " << tensor_pair_count << '\n';
 
+    // Validate host_api is properly initialized
+    if (runtime->host_api.copy_from_device == nullptr) {
+        std::cerr << "Error: host_api.copy_from_device not initialized\n";
+        return -1;
+    }
+
+    // PTO2 (device or host orchestration): graph output may be in packed buffer; copy from graph_output_ptr when set
+    // Note: pto2_sm is a DEVICE pointer, must copy header to host first before reading
+    void* pto2_sm = runtime->get_pto2_gm_sm_ptr();
+    uint64_t graph_out_ptr = 0;
+    int32_t graph_out_size = 0;
+    if (pto2_sm != nullptr) {
+        // Copy header from device to host to read graph_output_ptr/size
+        PTO2SharedMemoryHeader host_header;
+        int hdr_rc = runtime->host_api.copy_from_device(&host_header, pto2_sm, sizeof(PTO2SharedMemoryHeader));
+        if (hdr_rc == 0) {
+            graph_out_ptr = host_header.graph_output_ptr;
+            graph_out_size = host_header.graph_output_size;
+        } else {
+            std::cerr << "Warning: Failed to copy PTO2 header from device, using default tensor pairs\n";
+        }
+    }
+
+    bool first_output_tensor = true;  // Track first tensor with host_ptr (the actual output)
     for (int i = 0; i < tensor_pair_count; i++) {
         const TensorPair& pair = tensor_pairs[i];
+
+        // Skip if device pointer is null (nothing to copy or free)
+        if (pair.dev_ptr == nullptr) {
+            std::cerr << "Warning: Tensor " << i << " has null device pointer, skipping\n";
+            continue;
+        }
+
+        // If host pointer is null, this is a device-only allocation (e.g., gm_heap)
+        // Will be freed but no copy-back needed
+        if (pair.host_ptr == nullptr) {
+            std::cout << "Tensor " << i << ": device-only allocation (no copy-back)\n";
+            continue;
+        }
+
         void* src_ptr = pair.dev_ptr;
         size_t copy_size = pair.size;
-        if (i == 0 && graph_out_ptr != 0 && graph_out_size > 0) {
+        // Use graph_output_ptr for the first tensor that has a host pointer (the actual output)
+        if (first_output_tensor && graph_out_ptr != 0 && graph_out_size > 0) {
             src_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(graph_out_ptr));
             copy_size = static_cast<size_t>(graph_out_size);
+            std::cout << "Using packed output buffer: ptr=0x" << std::hex << graph_out_ptr
+                      << std::dec << ", size=" << graph_out_size << '\n';
+            first_output_tensor = false;
         }
+
         int copy_rc = runtime->host_api.copy_from_device(pair.host_ptr, src_ptr, copy_size);
         if (copy_rc != 0) {
             std::cerr << "Error: Failed to copy tensor " << i << " from device: " << copy_rc << '\n';
@@ -211,11 +356,15 @@ int validate_runtime_impl(Runtime *runtime) {
     // Note: PrintHandshakeResults is now called in DeviceRunner's destructor
 
     // Cleanup device tensors
-    std::cout << "\n=== Cleaning Up ===" << '\n';
-    for (int i = 0; i < tensor_pair_count; i++) {
-        runtime->host_api.device_free(tensor_pairs[i].dev_ptr);
+    if (runtime->host_api.device_free != nullptr && tensor_pair_count > 0) {
+        std::cout << "\n=== Cleaning Up ===" << '\n';
+        for (int i = 0; i < tensor_pair_count; i++) {
+            if (tensor_pairs[i].dev_ptr != nullptr) {
+                runtime->host_api.device_free(tensor_pairs[i].dev_ptr);
+            }
+        }
+        std::cout << "Freed " << tensor_pair_count << " device tensors\n";
     }
-    std::cout << "Freed " << tensor_pair_count << " device tensors\n";
 
     // Clear tensor pairs
     runtime->clear_tensor_pairs();

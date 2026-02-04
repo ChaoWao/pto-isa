@@ -1,16 +1,16 @@
 /**
  * PTO Runtime2 - Main Interface
- * 
+ *
  * This is the main header for the PTO Runtime2 system.
  * It provides a unified API for task graph construction and execution.
- * 
+ *
  * Key Features:
  * - Ring buffer based memory management (zero allocation overhead)
  * - Lazy invalidation TensorMap for dependency discovery
  * - Scope-based buffer lifecycle management
  * - Per-task spinlocks for concurrent fanout updates
  * - Orchestrator-Scheduler decoupling via shared memory
- * 
+ *
  * Usage:
  *   1. Create runtime: pto2_runtime_create()
  *   2. Build task graph in orchestration function:
@@ -19,7 +19,7 @@
  *   3. Mark orchestration complete: pto2_orchestrator_done()
  *   4. Execute or simulate: pto2_runtime_execute() / pto2_runtime_simulate()
  *   5. Destroy runtime: pto2_runtime_destroy()
- * 
+ *
  * Based on: docs/runtime_buffer_manager_methods.md
  */
 
@@ -52,7 +52,7 @@ typedef enum {
 
 /**
  * PTO Runtime2 context
- * 
+ *
  * Contains all state for orchestration and scheduling.
  * In simulated mode, runs in single process with shared address space.
  */
@@ -61,18 +61,18 @@ typedef struct PTO2Runtime {
     PTO2SharedMemoryHandle* sm_handle;
     PTO2OrchestratorState   orchestrator;
     PTO2SchedulerState      scheduler;
-    
+
     // GM Heap for output buffers
     void*                   gm_heap;
     int32_t                 gm_heap_size;
     bool                    gm_heap_owned;  // True if we allocated it
-    
+
     // Mode
     PTO2RuntimeMode         mode;
-    
+
     // Statistics
     int64_t                 total_cycles;
-    
+
 } PTO2Runtime;
 
 // =============================================================================
@@ -81,7 +81,7 @@ typedef struct PTO2Runtime {
 
 /**
  * Create a new runtime instance
- * 
+ *
  * @param mode Execution mode
  * @return Runtime context, or NULL on failure
  */
@@ -89,7 +89,7 @@ PTO2Runtime* pto2_runtime_create(PTO2RuntimeMode mode);
 
 /**
  * Create runtime with custom sizes
- * 
+ *
  * @param mode             Execution mode
  * @param task_window_size Number of task slots
  * @param heap_size        Size of GM heap
@@ -137,7 +137,7 @@ void pto2_runtime_set_mode(PTO2Runtime* rt, PTO2RuntimeMode mode);
 
 /**
  * Begin a new scope
- * 
+ *
  * All tasks submitted within this scope will have their lifetime
  * bounded by the scope. When scope_end() is called, the scope
  * releases its reference to all enclosed tasks.
@@ -146,7 +146,7 @@ void pto2_rt_scope_begin(PTO2Runtime* rt);
 
 /**
  * End current scope
- * 
+ *
  * Releases scope reference for all tasks submitted since scope_begin().
  * Tasks whose refcount reaches zero will have their buffers released.
  */
@@ -154,12 +154,12 @@ void pto2_rt_scope_end(PTO2Runtime* rt);
 
 /**
  * Submit a task
- * 
+ *
+ * The function address is resolved via kernel_id when the task is dispatched.
+ *
  * @param rt          Runtime context
- * @param kernel_id   InCore function ID
+ * @param kernel_id   InCore function ID (used to look up function address)
  * @param worker_type Target worker type
- * @param func_ptr    Function pointer (optional)
- * @param func_name   Function name (for debugging)
  * @param params      Array of task parameters
  * @param num_params  Number of parameters
  * @return Task ID, or -1 on failure
@@ -167,23 +167,12 @@ void pto2_rt_scope_end(PTO2Runtime* rt);
 int32_t pto2_rt_submit_task(PTO2Runtime* rt,
                              int32_t kernel_id,
                              PTO2WorkerType worker_type,
-                             void* func_ptr,
-                             const char* func_name,
                              PTO2TaskParam* params,
                              int32_t num_params);
 
 /**
- * Simplified task submission (auto-detect worker type)
- */
-int32_t pto2_rt_submit(PTO2Runtime* rt,
-                        const char* func_name,
-                        void* func_ptr,
-                        PTO2TaskParam* params,
-                        int32_t num_params);
-
-/**
  * Mark orchestration as complete
- * 
+ *
  * Signals that no more tasks will be submitted.
  */
 void pto2_rt_orchestration_done(PTO2Runtime* rt);
@@ -199,18 +188,18 @@ void* pto2_rt_get_output(PTO2Runtime* rt, int32_t task_id, int32_t output_idx);
 
 /**
  * Execute all submitted tasks
- * 
+ *
  * In EXECUTE mode, dispatches tasks to workers.
  * In SIMULATE mode, simulates execution with cycle counting.
  * In GRAPH_ONLY mode, does nothing (graph already built).
- * 
+ *
  * Blocks until all tasks complete.
  */
 void pto2_runtime_execute(PTO2Runtime* rt);
 
 /**
  * Signal task completion (called by worker)
- * 
+ *
  * @param rt      Runtime context
  * @param task_id Completed task ID
  */
@@ -218,7 +207,7 @@ void pto2_rt_task_complete(PTO2Runtime* rt, int32_t task_id);
 
 /**
  * Get next ready task for worker type
- * 
+ *
  * @param rt          Runtime context
  * @param worker_type Worker type requesting task
  * @return Task ID, or -1 if no ready tasks
@@ -246,7 +235,7 @@ int64_t pto2_runtime_get_cycles(PTO2Runtime* rt);
 
 /**
  * Dump task graph to file
- * 
+ *
  * @param rt       Runtime context
  * @param filename Output file path
  * @return 0 on success, -1 on failure

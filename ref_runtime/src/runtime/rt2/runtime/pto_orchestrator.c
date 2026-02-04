@@ -1,8 +1,8 @@
 /**
  * PTO Runtime2 - Orchestrator Implementation
- * 
+ *
  * Implements orchestrator state management, scope handling, and task submission.
- * 
+ *
  * Based on: docs/runtime_buffer_manager_methods.md
  */
 
@@ -43,30 +43,30 @@ bool pto2_orchestrator_init(PTO2OrchestratorState* orch,
                              void* gm_heap,
                              int32_t heap_size) {
     memset(orch, 0, sizeof(PTO2OrchestratorState));
-    
+
     orch->sm_handle = sm_handle;
     orch->gm_heap_base = gm_heap;
     orch->gm_heap_size = heap_size;
-    
+
     // Initialize heap ring buffer
     pto2_heap_ring_init(&orch->heap_ring, gm_heap, heap_size,
                         &sm_handle->header->heap_tail);
-    
+
     // Initialize task ring buffer
     pto2_task_ring_init(&orch->task_ring, sm_handle->task_descriptors,
                         sm_handle->header->task_window_size,
                         &sm_handle->header->last_task_alive);
-    
+
     // Initialize dependency list pool
     pto2_dep_pool_init(&orch->dep_pool, sm_handle->dep_list_pool,
                        sm_handle->header->dep_list_pool_size);
-    
+
     // Initialize TensorMap
     if (!pto2_tensormap_init_default(&orch->tensor_map)) {
         return false;
     }
     orch->tensormap_last_cleanup = 0;
-    
+
     // Initialize scope stack
     orch->scope_stack = (int32_t*)malloc(PTO2_MAX_SCOPE_DEPTH * sizeof(int32_t));
     if (!orch->scope_stack) {
@@ -75,13 +75,13 @@ bool pto2_orchestrator_init(PTO2OrchestratorState* orch,
     }
     orch->scope_stack_top = -1;
     orch->scope_stack_capacity = PTO2_MAX_SCOPE_DEPTH;
-    
+
     return true;
 }
 
 void pto2_orchestrator_destroy(PTO2OrchestratorState* orch) {
     pto2_tensormap_destroy(&orch->tensor_map);
-    
+
     if (orch->scope_stack) {
         free(orch->scope_stack);
         orch->scope_stack = NULL;
@@ -93,15 +93,15 @@ void pto2_orchestrator_reset(PTO2OrchestratorState* orch) {
     pto2_task_ring_reset(&orch->task_ring);
     pto2_dep_pool_reset(&orch->dep_pool);
     pto2_tensormap_reset(&orch->tensor_map);
-    
+
     orch->tensormap_last_cleanup = 0;
     orch->scope_stack_top = -1;
-    
+
     orch->tasks_submitted = 0;
     orch->buffers_allocated = 0;
     orch->bytes_allocated = 0;
     orch->scope_depth_max = 0;
-    
+
     // Reset shared memory header
     orch->sm_handle->header->current_task_index = 0;
     orch->sm_handle->header->heap_top = 0;
@@ -131,11 +131,11 @@ void pto2_scope_begin(PTO2OrchestratorState* orch) {
         fprintf(stderr, "ERROR: Scope stack overflow\n");
         return;
     }
-    
+
     // Push current task index to scope stack
     int32_t current_pos = orch->task_ring.current_index;
     orch->scope_stack[++orch->scope_stack_top] = current_pos;
-    
+
     // Update max depth tracking
     int32_t depth = orch->scope_stack_top + 1;
     if (depth > orch->scope_depth_max) {
@@ -149,11 +149,11 @@ void pto2_scope_end(PTO2OrchestratorState* orch) {
         fprintf(stderr, "ERROR: Scope stack underflow\n");
         return;
     }
-    
+
     // Pop scope stack to get begin position
     int32_t scope_begin_pos = orch->scope_stack[orch->scope_stack_top--];
     int32_t scope_end_pos = orch->task_ring.current_index;
-    
+
     // Notify scheduler to release scope references
     // In simulated mode, we can call scheduler directly
     if (orch->scheduler) {
@@ -170,12 +170,12 @@ void pto2_orchestrator_sync_tensormap(PTO2OrchestratorState* orch) {
     // Read current last_task_alive from shared memory
     int32_t new_last_task_alive = PTO2_LOAD_ACQUIRE(
         &orch->sm_handle->header->last_task_alive);
-    
+
     // Update TensorMap validity threshold
     pto2_tensormap_sync_validity(&orch->tensor_map, new_last_task_alive);
-    
+
     // Periodically cleanup TensorMap to remove stale entries from bucket chains
-    if (new_last_task_alive - orch->tensormap_last_cleanup >= 
+    if (new_last_task_alive - orch->tensormap_last_cleanup >=
         PTO2_TENSORMAP_CLEANUP_INTERVAL) {
         pto2_tensormap_cleanup_retired(&orch->tensor_map,
                                         orch->tensormap_last_cleanup,
@@ -195,13 +195,13 @@ void pto2_add_consumer_to_producer(PTO2OrchestratorState* orch,
     // Acquire per-task spinlock
     // This synchronizes with scheduler's on_task_complete_threadsafe
     task_fanout_lock(producer);
-    
+
     // Prepend consumer to producer's fanout list
     producer->fanout_head = pto2_dep_list_prepend(&orch->dep_pool,
                                                    producer->fanout_head,
                                                    consumer_id);
     producer->fanout_count++;
-    
+
     // Check if producer has already completed
     // If so, we need to update consumer's fanin_refcount directly
     // because on_task_complete_threadsafe has already run and won't see this consumer
@@ -209,14 +209,14 @@ void pto2_add_consumer_to_producer(PTO2OrchestratorState* orch,
         PTO2SchedulerState* sched = orch->scheduler;
         int32_t prod_slot = pto2_task_slot(sched, producer_id);
         int32_t prod_state = __atomic_load_n(&sched->task_state[prod_slot], __ATOMIC_ACQUIRE);
-        
+
         if (prod_state >= PTO2_TASK_COMPLETED) {
             // Producer already completed - update consumer's fanin_refcount directly
             int32_t cons_slot = pto2_task_slot(sched, consumer_id);
             __atomic_fetch_add(&sched->fanin_refcount[cons_slot], 1, __ATOMIC_SEQ_CST);
         }
     }
-    
+
     // Release spinlock
     task_fanout_unlock(producer);
 }
@@ -225,15 +225,15 @@ void* pto2_alloc_packed_buffer(PTO2OrchestratorState* orch, int32_t total_size) 
     if (total_size <= 0) {
         return NULL;
     }
-    
+
     void* buffer = pto2_heap_ring_alloc(&orch->heap_ring, total_size);
-    
+
     orch->buffers_allocated++;
     orch->bytes_allocated += total_size;
-    
+
     // Update shared memory with new heap top
     PTO2_STORE_RELEASE(&orch->sm_handle->header->heap_top, orch->heap_ring.top);
-    
+
     return buffer;
 }
 
@@ -276,29 +276,27 @@ void pto2_param_fix_sizes(void* params_base, int32_t num_params, int32_t size_by
 int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                           int32_t kernel_id,
                           PTO2WorkerType worker_type,
-                          void* func_ptr,
-                          const char* func_name,
                           PTO2TaskParam* params,
                           int32_t num_params) {
-    
+
     // === STEP 0: Sync TensorMap validity and optional cleanup ===
     pto2_orchestrator_sync_tensormap(orch);
-    
+
     // === STEP 1: Allocate task slot from Task Ring (may stall) ===
     int32_t task_id = pto2_task_ring_alloc(&orch->task_ring);
     if (task_id < 0) {
         return -1;  // Should not happen (stalls instead)
     }
-    
+
     PTO2TaskDescriptor* task = pto2_task_ring_get(&orch->task_ring, task_id);
-    
+
     // Initialize task descriptor
     task->task_id = task_id;
     task->kernel_id = kernel_id;
     task->worker_type = worker_type;
     task->scope_depth = pto2_get_scope_depth(orch);
-    task->func_ptr = func_ptr;
-    task->func_name = func_name;
+    task->func_ptr = NULL;   // Function address resolved via kernel_id at dispatch time
+    task->func_name = NULL;  // No longer passed as parameter
     task->fanin_head = 0;
     task->fanin_count = 0;
     task->fanout_head = 0;
@@ -315,16 +313,16 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
     task->num_outputs = 0;
     task->num_inputs = 0;
     task->is_active = true;
-    
+
     // Temporary storage for collecting output sizes
     int32_t output_sizes[PTO2_MAX_OUTPUTS];
     int32_t num_outputs = 0;
     int32_t total_output_size = 0;
-    
+
     // Temporary storage for fanin
     int32_t fanin_temp[PTO2_MAX_INPUTS];
     int32_t fanin_count = 0;
-    
+
     // === STEP 2: First pass - collect output sizes and process inputs ===
     /* Debug: raw bytes at size offset for first param (optional, set PTO2_DEBUG_PARAMS=1 to enable) */
     if (getenv("PTO2_DEBUG_PARAMS") != NULL && num_params > 0) {
@@ -362,12 +360,12 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
             .offset = 0,
             .size = param_size
         };
-        
+
         switch (p->type) {
             case PTO2_PARAM_INPUT: {
                 // Look up producer via TensorMap
                 int32_t producer_id = pto2_tensormap_lookup(&orch->tensor_map, &region);
-                
+
                 if (producer_id >= 0) {
                     // Check if this producer is already in fanin list (avoid duplicates)
                     bool already_added = false;
@@ -377,13 +375,13 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                             break;
                         }
                     }
-                    
+
                     if (!already_added) {
                         // Add to fanin list (this task depends on producer)
                         if (fanin_count < PTO2_MAX_INPUTS) {
                             fanin_temp[fanin_count++] = producer_id;
                         }
-                        
+
                         // Add this task to producer's fanout list (with spinlock)
                         PTO2TaskDescriptor* producer = pto2_task_ring_get(
                             &orch->task_ring, producer_id);
@@ -393,7 +391,7 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                 task->num_inputs++;
                 break;
             }
-            
+
             case PTO2_PARAM_OUTPUT: {
                 // Collect output size for packed buffer allocation
                 if (num_outputs < PTO2_MAX_OUTPUTS) {
@@ -418,10 +416,10 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                 }
                 break;
             }
-            
+
             case PTO2_PARAM_INOUT: {
                 // INOUT = INPUT + OUTPUT
-                
+
                 // Handle as input (get dependency on previous writer)
                 int32_t producer_id = pto2_tensormap_lookup(&orch->tensor_map, &region);
                 if (producer_id >= 0) {
@@ -433,7 +431,7 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                             break;
                         }
                     }
-                    
+
                     if (!already_added) {
                         if (fanin_count < PTO2_MAX_INPUTS) {
                             fanin_temp[fanin_count++] = producer_id;
@@ -444,7 +442,7 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                     }
                 }
                 task->num_inputs++;
-                
+
                 // Collect output size for packed buffer
                 if (num_outputs < PTO2_MAX_OUTPUTS) {
                     int32_t out_size = param_size;
@@ -466,20 +464,20 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
             }
         }
     }
-    
+
     /* Debug: each output tensor size at submit */
     fprintf(stderr, "[PTO2 submit] task_id=%d num_outputs=%d output_sizes:", task_id, num_outputs);
     for (int i = 0; i < num_outputs; i++)
         fprintf(stderr, " %d", output_sizes[i]);
     fprintf(stderr, "\n");
-    
+
     // === STEP 3: Allocate packed buffer from Heap Ring (may stall) ===
     // Each output slot is aligned to PTO2_PACKED_OUTPUT_ALIGN (1024B); gap after data is padding.
     // Copy-back: use (packed_buffer_base + output_offsets[i]) as pointer, actual tensor size as length.
     if (total_output_size > 0) {
         task->packed_buffer_base = pto2_alloc_packed_buffer(orch, total_output_size);
         task->packed_buffer_end = (char*)task->packed_buffer_base + total_output_size;
-        
+
         // Offsets: each output at 1024B-aligned slot; slot size = ALIGN_UP(output_sizes[i], 1024)
         int32_t offset = 0;
         for (int i = 0; i < num_outputs; i++) {
@@ -496,12 +494,12 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
         }
     }
     task->num_outputs = num_outputs;
-    
+
     // === STEP 4: Second pass - register outputs in TensorMap ===
     int32_t output_idx = 0;
     for (int i = 0; i < num_params; i++) {
         PTO2TaskParam* p = &params[i];
-        
+
         if (p->type == PTO2_PARAM_OUTPUT || p->type == PTO2_PARAM_INOUT) {
             // IMPORTANT: Use the ORIGINAL buffer address (p->buffer) for TensorMap,
             // not the packed buffer address. This ensures that consumers looking up
@@ -512,13 +510,13 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
                 .offset = 0,
                 .size = PTO2_PARAM_SIZE(p)
             };
-            
+
             // Register in TensorMap: this region is produced by task_id
             pto2_tensormap_insert(&orch->tensor_map, &region, task_id);
             output_idx++;
         }
     }
-    
+
     // === STEP 5: Finalize fanin list ===
     // First build the fanin list
     for (int i = 0; i < fanin_count; i++) {
@@ -528,31 +526,31 @@ int32_t pto2_submit_task(PTO2OrchestratorState* orch,
     }
     // Use release semantics to ensure fanin list is visible before fanin_count
     __atomic_store_n(&task->fanin_count, fanin_count, __ATOMIC_RELEASE);
-    
+
     // === STEP 6: Initialize task in scheduler ===
     // In multi-threaded mode, scheduler thread handles task initialization via polling
     if (orch->scheduler && orch->init_task_on_submit) {
         pto2_scheduler_init_task(orch->scheduler, task_id, task);
     }
-    
+
     // === STEP 7: Update shared memory with current task index ===
     PTO2_STORE_RELEASE(&orch->sm_handle->header->current_task_index,
                        orch->task_ring.current_index);
-    
+
     orch->tasks_submitted++;
 
     return task_id;
 }
 
-void* pto2_task_get_output(PTO2OrchestratorState* orch, 
-                            int32_t task_id, 
+void* pto2_task_get_output(PTO2OrchestratorState* orch,
+                            int32_t task_id,
                             int32_t output_idx) {
     PTO2TaskDescriptor* task = pto2_task_ring_get(&orch->task_ring, task_id);
-    
+
     if (output_idx < 0 || output_idx >= task->num_outputs) {
         return NULL;
     }
-    
+
     return (char*)task->packed_buffer_base + task->output_offsets[output_idx];
 }
 
@@ -571,7 +569,7 @@ void pto2_orchestrator_wait_all(PTO2OrchestratorState* orch) {
     if (!orch->scheduler) {
         return;  // Can't wait without scheduler reference
     }
-    
+
     // Spin-wait until scheduler reports all tasks done
     while (!pto2_scheduler_is_done(orch->scheduler)) {
         PTO2_SPIN_PAUSE();
@@ -594,12 +592,12 @@ void pto2_orchestrator_print_stats(PTO2OrchestratorState* orch) {
     printf("Max scope depth:     %lld\n", (long long)orch->scope_depth_max);
     printf("Current scope depth: %d\n", pto2_get_scope_depth(orch));
     printf("Task ring active:    %d\n", pto2_task_ring_active_count(&orch->task_ring));
-    printf("Heap ring used:      %d / %d\n", 
+    printf("Heap ring used:      %d / %d\n",
            orch->heap_ring.top, orch->heap_ring.size);
     printf("Dep pool used:       %d / %d\n",
            pto2_dep_pool_used(&orch->dep_pool),
            orch->dep_pool.capacity);
-    printf("TensorMap valid:     %d\n", 
+    printf("TensorMap valid:     %d\n",
            pto2_tensormap_valid_count(&orch->tensor_map));
     printf("===============================\n");
 }
@@ -607,10 +605,10 @@ void pto2_orchestrator_print_stats(PTO2OrchestratorState* orch) {
 void pto2_orchestrator_print_scope_stack(PTO2OrchestratorState* orch) {
     printf("=== Scope Stack ===\n");
     printf("Depth: %d\n", pto2_get_scope_depth(orch));
-    
+
     for (int i = 0; i <= orch->scope_stack_top; i++) {
         printf("  [%d] begin_pos = %d\n", i, orch->scope_stack[i]);
     }
-    
+
     printf("==================\n");
 }

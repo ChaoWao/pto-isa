@@ -155,7 +155,8 @@ Golden.py interface:
         print(f"Error: kernel_config.py not found in {kernels_path}")
         return 1
 
-    # Orchestrator location for rt2 (default: device_aicpu). -u is deprecated, same as --orchestrator device_aicpu.
+    # Orchestrator location for rt2.
+    # Both a2a3 (real hardware) and a2a3sim (simulation) support device_aicpu orchestration.
     orchestrator = args.orchestrator
     if getattr(args, "use_device_orchestration", False):
         orchestrator = "device_aicpu"

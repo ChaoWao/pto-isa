@@ -96,8 +96,8 @@ KERNELS = [
 
 # Orchestration function configuration
 ORCHESTRATION = {
-    "source": str(KERNELS_DIR / "orchestration/example_orch.cpp"),
-    "function_name": "BuildExampleGraph"  # Orchestration function name
+    "source": str(KERNELS_DIR / "orchestration/example_orchestration.cpp"),
+    "function_name": "OrchestrationEntry"  # Orchestration function name
 }
 ```
 

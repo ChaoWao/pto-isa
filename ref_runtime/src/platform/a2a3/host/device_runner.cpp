@@ -332,16 +332,30 @@ int DeviceRunner::run(Runtime& runtime,
         runtime.workers[i].core_type = (i < num_aic) ? CoreType::AIC : CoreType::AIV;
     }
 
-    // Set function_bin_addr for all tasks (NEW - Runtime function pointer
-    // dispatch)
+    // Set function_bin_addr: PTO2 dispatch (SM) vs legacy in-Runtime task list
     std::cout << "\n=== Setting function_bin_addr for Tasks ===" << '\n';
-    for (int i = 0; i < runtime.get_task_count(); i++) {
-        Task* task = runtime.get_task(i);
-        if (task != nullptr) {
-            uint64_t addr = get_function_bin_addr(task->func_id);
-            task->function_bin_addr = addr;
-            std::cout << "  Task " << i << " (func_id=" << task->func_id << ") -> function_bin_addr=0x" << std::hex
-                      << addr << std::dec << '\n';
+    bool use_pto2 = (runtime.get_pto2_gm_sm_ptr() != nullptr);
+    if (use_pto2) {
+        // PTO2 dispatch mode: copy func_id_to_addr_ to Runtime::func_id_to_addr_[]
+        // This is required because AICPU Scheduler calls runtime->get_function_bin_addr()
+        // in build_pto2_payload() to get kernel addresses for device orchestration
+        runtime.set_use_pto2_dispatch(true);
+        for (const auto& kv : func_id_to_addr_) {
+            runtime.set_function_bin_addr(kv.first, kv.second);
+            std::cout << "  func_id=" << kv.first << " -> function_bin_addr=0x"
+                      << std::hex << kv.second << std::dec << '\n';
+        }
+        std::cout << "  (PTO2 dispatch, " << func_id_to_addr_.size() << " kernels)\n";
+    } else {
+        // Legacy mode: set function_bin_addr on Task structures
+        for (int i = 0; i < runtime.get_task_count(); i++) {
+            Task* task = runtime.get_task(i);
+            if (task != nullptr) {
+                uint64_t addr = get_function_bin_addr(task->func_id);
+                task->function_bin_addr = addr;
+                std::cout << "  Task " << i << " (func_id=" << task->func_id << ") -> function_bin_addr=0x" << std::hex
+                          << addr << std::dec << '\n';
+            }
         }
     }
     std::cout << '\n';
@@ -353,10 +367,10 @@ int DeviceRunner::run(Runtime& runtime,
         return rc;
     }
 
-    // Launch AICPU init kernel（打印 so_path / kernel 便于定位 507018）
+    // sending DynTileFwkKernelServerInit, and CANN will call DynTileFwkBackendKernelServer in device
     std::cout << "DeviceRunner: AICPU Init: so_path=" << aicpu_so_path_
               << " kernel=DynTileFwkBackendKernelServerInit aicpu_num=1\n";
-    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkBackendKernelServerInit", 1);
+    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkKernelServerInit", 1);
     if (rc != 0) {
         std::cerr << "Error: launch_aicpu_kernel (init) failed: " << rc << " (0x" << std::hex << rc << std::dec << ")\n";
         kernel_args_.finalize_runtime_args();
@@ -372,8 +386,8 @@ int DeviceRunner::run(Runtime& runtime,
     }
     std::cout << "DeviceRunner: AICPU Init kernel completed OK\n";
 
-    // Launch AICPU main kernel
-    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkBackendKernelServer", launch_aicpu_num);
+    // sending DynTileFwkKernelServer, and CANN will call DynTileFwkBackendKernelServer in device
+    rc = launch_aicpu_kernel(stream_aicpu_, &kernel_args_.args, "DynTileFwkKernelServer", launch_aicpu_num);
     if (rc != 0) {
         std::cerr << "Error: launch_aicpu_kernel (main) failed: " << rc << '\n';
         kernel_args_.finalize_runtime_args();

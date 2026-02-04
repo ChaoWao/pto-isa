@@ -204,6 +204,10 @@ private:
   bool use_pto2_dispatch_;
   uint64_t func_id_to_addr_[RUNTIME_MAX_FUNC_ID];  // kernel_id -> GM function_bin_addr
 
+  // Device orchestration SO (binary data passed from host, loaded via dlopen by AICPU)
+  const void* device_orch_so_data_;
+  size_t device_orch_so_size_;
+
 public:
     /**
      * Constructor - zero-initialize all arrays
@@ -334,6 +338,14 @@ public:
     void set_use_pto2_dispatch(bool v);
     uint64_t get_function_bin_addr(int func_id) const;
     void set_function_bin_addr(int func_id, uint64_t addr);
+
+    // Device orchestration SO (binary data for AICPU to dlopen)
+    const void* get_device_orch_so_data() const { return device_orch_so_data_; }
+    size_t get_device_orch_so_size() const { return device_orch_so_size_; }
+    void set_device_orch_so(const void* data, size_t size) {
+        device_orch_so_data_ = data;
+        device_orch_so_size_ = size;
+    }
 
     // =========================================================================
     // Host API (host-only, not copied to device)

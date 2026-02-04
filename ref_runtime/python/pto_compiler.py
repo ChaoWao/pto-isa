@@ -231,13 +231,15 @@ class PTOCompiler:
     def compile_orchestration(
         self,
         source_path: str,
-        extra_include_dirs: Optional[List[str]] = None
+        extra_include_dirs: Optional[List[str]] = None,
+        target: str = "host"
     ) -> bytes:
         """
         Compile an orchestration function to a shared library (.so).
 
         The orchestration function must have signature:
-            int FuncName(Runtime* runtime, uint64_t* args, int arg_count);
+            For host: int FuncName(Runtime* runtime, uint64_t* args, int arg_count);
+            For device: void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count);
 
         Note: Use get_platform_include_dirs() to get platform-specific includes
         (e.g., for device_runner.h) and add them to extra_include_dirs.
@@ -246,6 +248,9 @@ class PTOCompiler:
             source_path: Path to orchestration source file (.cpp)
             extra_include_dirs: Additional include directories (must include
                                paths to runtime.h and device_runner.h)
+            target: "host" for host CPU orchestration, "device" for AICPU orchestration.
+                    For device on a2a3 platform: uses aarch64 cross-compiler.
+                    For device on a2a3sim platform: uses g++.
 
         Returns:
             Binary contents of the compiled .so file
@@ -253,22 +258,69 @@ class PTOCompiler:
         Raises:
             FileNotFoundError: If source file not found
             RuntimeError: If compilation fails
+            ValueError: If target is invalid
         """
+        if target not in ("host", "device"):
+            raise ValueError(f"target must be 'host' or 'device', got {target!r}")
+
         source_path = os.path.abspath(source_path)
         if not os.path.isfile(source_path):
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
         # Generate output path
         timestamp = int(time.time() * 1000)
-        output_path = f"/tmp/orch_{timestamp}_{os.getpid()}.so"
+        output_path = f"/tmp/orch_{target}_{timestamp}_{os.getpid()}.so"
 
-        # Build compilation command (using g++)
+        # Determine compiler based on target and platform
+        if target == "device" and self.platform == "a2a3":
+            # Device orchestration on real hardware: use aarch64 cross-compiler
+            if not self.ascend_home_path:
+                raise RuntimeError(
+                    "ASCEND_HOME_PATH required for device orchestration on a2a3 platform"
+                )
+            compiler = os.path.join(
+                self.ascend_home_path, "tools", "hcc", "bin", "aarch64-target-linux-gnu-g++"
+            )
+            if not os.path.isfile(compiler):
+                raise FileNotFoundError(f"aarch64 cross-compiler not found: {compiler}")
+        else:
+            # Host orchestration or device on a2a3sim: use g++
+            compiler = "g++"
+
+        # Build compilation command
         cmd = [
-            "g++",
+            compiler,
             "-shared", "-fPIC",
             "-O3", "-g",
             "-std=c++17",
         ]
+
+        # For device orchestration on a2a3, add static linking and symbol export options
+        if target == "device" and self.platform == "a2a3":
+            cmd.extend([
+                "-static-libstdc++",
+                "-static-libgcc",
+                "-Wl,--export-dynamic",  # Ensure symbols are exported (needed for dlsym)
+            ])
+            # Include runtime source files directly (dlopen'd SO cannot access libaicpu.so symbols)
+            runtime_dir = os.path.join(os.path.dirname(__file__), "..", "src", "runtime", "rt2", "runtime")
+            runtime_dir = os.path.abspath(runtime_dir)
+            runtime_sources = [
+                "pto_runtime2.c",
+                "pto_orchestrator.c",
+                "pto_shared_memory.c",
+                "pto_scheduler.c",
+                "pto_ring_buffer.c",
+                "pto_interval_tree.c",
+                "pto_tensormap.c",
+                "pto_logical_tensor.c",
+                "pto_worker.c",
+                "pto_runtime2_threaded_stub.c",
+            ]
+            for src in runtime_sources:
+                src_path = os.path.join(runtime_dir, src)
+                if os.path.isfile(src_path):
+                    cmd.append(src_path)
 
         # On macOS, allow undefined symbols to be resolved at dlopen time
         if sys.platform == "darwin":
@@ -289,8 +341,9 @@ class PTOCompiler:
         cmd.extend(["-o", output_path, source_path])
 
         # Print compilation command
+        target_name = "Host" if target == "host" else f"Device ({self.platform})"
         print(f"\n{'='*80}")
-        print(f"[Orchestration] Compiling: {source_path}")
+        print(f"[Orchestration {target_name}] Compiling: {source_path}")
         print(f"  Command: {' '.join(cmd)}")
         print(f"{'='*80}\n")
 
@@ -314,7 +367,7 @@ class PTOCompiler:
                 )
 
         except FileNotFoundError:
-            raise RuntimeError("g++ compiler not found. Please install g++.")
+            raise RuntimeError(f"Compiler not found: {compiler}")
 
         # Verify output file exists and read binary data
         if not os.path.isfile(output_path):

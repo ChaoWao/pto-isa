@@ -46,6 +46,8 @@ Runtime::Runtime() {
     for (int i = 0; i < RUNTIME_MAX_FUNC_ID; i++) {
         func_id_to_addr_[i] = 0;
     }
+    device_orch_so_data_ = nullptr;
+    device_orch_so_size_ = 0;
 }
 
 // =============================================================================
@@ -230,7 +232,10 @@ void Runtime::clear_tensor_pairs() {
 
 bool Runtime::get_orch_built_on_host() const { return orch_built_on_host_; }
 void* Runtime::get_pto2_gm_sm_ptr() const { return pto2_gm_sm_ptr_; }
-uint64_t* Runtime::get_orch_args() const { return orch_args_; }
+uint64_t* Runtime::get_orch_args() const {
+    // Return embedded storage directly (not the pointer) so device code gets correct device address
+    return orch_arg_count_ > 0 ? const_cast<uint64_t*>(orch_args_storage_) : nullptr;
+}
 int Runtime::get_orch_arg_count() const { return orch_arg_count_; }
 void Runtime::set_orch_built_on_host(bool v) { orch_built_on_host_ = v; }
 void Runtime::set_pto2_gm_sm_ptr(void* p) { pto2_gm_sm_ptr_ = p; }

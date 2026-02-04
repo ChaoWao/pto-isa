@@ -1,17 +1,17 @@
 /**
- * Example: aicpu_orchestration_entry 设备端编排骨架
+ * Example: aicpu_orchestration_entry orchestration entry
  *
- * 与 example_orch.cpp 中 build_example_graph 对齐同一 DAG：
+ * DAG structure for formula: (a + b + 1)(a + b + 2)
  *   t0: c = a + b     (func_id=0, kernel_add)
  *   t1: d = c + 1     (func_id=1, kernel_add_scalar)
  *   t2: e = c + 2     (func_id=1, kernel_add_scalar)
  *   t3: f = d * e     (func_id=2, kernel_mul)
- *   依赖: t0→t1, t0→t2, t1→t3, t2→t3
+ *   Dependencies: t0->t1, t0->t2, t1->t3, t2->t3
  *
- * 编译说明（启用设备编排时）：
- *   - 将本文件加入 AICPU 构建，并链接 rt2 runtime 的 .c/.h
- *   - 或复制到 ref_runtime/src/runtime/rt2/aicpu/ 并配置 CUSTOM_SOURCE_DIRS 包含 runtime
- * 头文件路径示例：-I$(REF_RUNTIME)/src/runtime/rt2/runtime
+ * Compilation notes:
+ *   - Add this file to AICPU build and link with rt2 runtime .c/.h
+ *   - Or copy to ref_runtime/src/runtime/rt2/aicpu/ and configure CUSTOM_SOURCE_DIRS to include runtime
+ * Include path example: -I$(REF_RUNTIME)/src/runtime/rt2/runtime
  */
 
 #include <stdint.h>
@@ -53,6 +53,7 @@ static char s_gm_heap_stub[PTO2_HEAP_SIZE];
 
 extern "C" {
 
+__attribute__((visibility("default")))
 void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
     if (!sm_ptr || !args || arg_count < 7) {
         /* 无效参数时仅打完成标记，与 stub 行为一致 */
@@ -123,70 +124,75 @@ void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count) {
 
     PTO2_SCOPE_BEGIN(rt);
 
-    /* t0: c = a + b   (func_id=0, kernel_add, AIV) */
+    /* t0: c = a + b   (kernel_id=0, kernel_add, AIV) */
     PTO2TaskParam params_t0[] = {
         PTO2_INPUT(dev_a, tile, sz),
         PTO2_INPUT(dev_b, tile, sz),
         PTO2_OUTPUT(dev_c, tile, sz),
     };
-    if (pto2_rt_submit_task(rt, 0, PTO2_WORKER_VECTOR, nullptr, "kernel_add", params_t0, 3) < 0) {
+    if (pto2_rt_submit_task(rt, 0, PTO2_WORKER_VECTOR, params_t0, 3) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
-        pto2_runtime_destroy(rt);
-        pto2_sm_destroy(sm_handle);
+        pto2_runtime_destroy(rt);  // Also destroys sm_handle
         *(volatile int32_t*)((char*)sm_ptr + 8) = 1;
         return;
     }
 
-    /* t1: d = c + 1   (func_id=1, kernel_add_scalar) — 依赖 t0 的 dev_c */
+    /* t1: d = c + 1   (kernel_id=1, kernel_add_scalar) — depends on t0's dev_c */
     PTO2TaskParam params_t1[] = {
         PTO2_INPUT(dev_c, tile, sz),
         PTO2_OUTPUT(dev_d, tile, sz),
     };
-    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, nullptr, "kernel_add_scalar", params_t1, 2) < 0) {
+    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, params_t1, 2) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
-        pto2_runtime_destroy(rt);
-        pto2_sm_destroy(sm_handle);
+        pto2_runtime_destroy(rt);  // Also destroys sm_handle
         *(volatile int32_t*)((char*)sm_ptr + 8) = 1;
         return;
     }
 
-    /* t2: e = c + 2   (func_id=1, kernel_add_scalar) — 依赖 t0 的 dev_c */
+    /* t2: e = c + 2   (kernel_id=1, kernel_add_scalar) — depends on t0's dev_c */
     PTO2TaskParam params_t2[] = {
         PTO2_INPUT(dev_c, tile, sz),
         PTO2_OUTPUT(dev_e, tile, sz),
     };
-    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, nullptr, "kernel_add_scalar", params_t2, 2) < 0) {
+    if (pto2_rt_submit_task(rt, 1, PTO2_WORKER_VECTOR, params_t2, 2) < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
-        pto2_runtime_destroy(rt);
-        pto2_sm_destroy(sm_handle);
+        pto2_runtime_destroy(rt);  // Also destroys sm_handle
         *(volatile int32_t*)((char*)sm_ptr + 8) = 1;
         return;
     }
 
-    /* t3: f = d * e   (func_id=2, kernel_mul) — 依赖 t1 的 dev_d、t2 的 dev_e */
+    /* t3: f = d * e   (kernel_id=2, kernel_mul) — depends on t1's dev_d, t2's dev_e */
     PTO2TaskParam params_t3[] = {
         PTO2_INPUT(dev_d, tile, sz),
         PTO2_INPUT(dev_e, tile, sz),
         PTO2_OUTPUT(dev_f, tile, sz),
     };
-    if (pto2_rt_submit_task(rt, 2, PTO2_WORKER_VECTOR, nullptr, "kernel_mul", params_t3, 3) < 0) {
+    int32_t task3_id = pto2_rt_submit_task(rt, 2, PTO2_WORKER_VECTOR, params_t3, 3);
+    if (task3_id < 0) {
         PTO2_SCOPE_END(rt);
         pto2_rt_orchestration_done(rt);
-        pto2_runtime_destroy(rt);
-        pto2_sm_destroy(sm_handle);
+        pto2_runtime_destroy(rt);  // Also destroys sm_handle
         *(volatile int32_t*)((char*)sm_ptr + 8) = 1;
         return;
+    }
+
+    /* Set graph_output_ptr so host can copy from packed buffer */
+    void* graph_out_ptr = pto2_rt_get_output(rt, task3_id, 0);
+    if (graph_out_ptr && size_f > 0) {
+        rt->sm_handle->header->graph_output_ptr = (uint64_t)(uintptr_t)graph_out_ptr;
+        rt->sm_handle->header->graph_output_size = (int32_t)size_f;
     }
 
     PTO2_SCOPE_END(rt);
     pto2_rt_orchestration_done(rt);
 
-    /* 4) 清理（不释放 sm_ptr / gm_heap，由调用方管理） */
+    /* 4) 清理（不释放 sm_ptr / gm_heap，由调用方管理）
+     * Note: pto2_runtime_destroy already calls pto2_sm_destroy(rt->sm_handle),
+     * so we should NOT call pto2_sm_destroy(sm_handle) again to avoid double-free */
     pto2_runtime_destroy(rt);
-    pto2_sm_destroy(sm_handle);
 
     /* 打完成标记，供调度线程轮询 */
     *(volatile int32_t*)((char*)sm_ptr + 8) = 1;

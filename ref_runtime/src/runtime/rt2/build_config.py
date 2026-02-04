@@ -4,7 +4,7 @@
 BUILD_CONFIG = {
     "aicore": {
         "include_dirs": ["runtime"],
-        "source_dirs": ["aicore", "runtime"]
+        "source_dirs": ["aicore"]
     },
     "aicpu": {
         "include_dirs": ["runtime"],

@@ -11,7 +11,7 @@ Usage:
     Runtime = bind_host_binary("/path/to/libpto_runtime.so")
 
     runtime = Runtime()
-    runtime.initialize(orch_so_binary, "build_example_graph", func_args)
+    runtime.initialize(orch_so_binary, "aicpu_orchestration_entry", func_args)
 
     register_kernel(0, kernel_add)
     register_kernel(1, kernel_add_scalar)
@@ -223,6 +223,9 @@ class Runtime:
         # Convert orch_so_binary to ctypes array (can be empty when use_device_orchestration or run_orchestrator_on_host)
         orch_so_size = len(orch_so_binary) if orch_so_binary else 0
         orch_so_array = (c_uint8 * orch_so_size).from_buffer_copy(orch_so_binary) if orch_so_size else None
+
+        # Keep reference to prevent GC - C++ stores pointer to this data for later use by AICPU
+        self._orch_so_array = orch_so_array
 
         rc = self.lib.init_runtime(
             self._handle,
@@ -534,7 +537,7 @@ def bind_host_binary(lib_path: Union[str, Path, bytes]) -> type:
         Runtime = bind_host_binary("/path/to/libpto_runtime.so")
 
         runtime = Runtime()
-        runtime.initialize(orch_so_binary, "build_example_graph", func_args)
+        runtime.initialize(orch_so_binary, "aicpu_orchestration_entry", func_args)
 
         register_kernel(0, kernel_add)
         register_kernel(1, kernel_add_scalar)

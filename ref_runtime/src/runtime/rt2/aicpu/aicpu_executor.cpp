@@ -1,11 +1,19 @@
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unistd.h>
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 
 #include "aicpu/device_log.h"
 #include "runtime.h"
@@ -14,8 +22,8 @@
 #include "pto_shared_memory.h"
 #include "pto_runtime2_types.h"
 
-// Device orchestration entry (weak symbol in stub; user can override)
-extern "C" void aicpu_orchestration_entry(void* sm_ptr, uint64_t* args, int arg_count);
+// Device orchestration entry function type
+typedef void (*DeviceOrchestrationFunc)(void* sm_ptr, uint64_t* args, int arg_count);
 
 constexpr int MAX_AICPU_THREADS = 4;
 constexpr int MAX_AIC_PER_THREAD = 24;
@@ -756,10 +764,96 @@ int AicpuExecutor::run(Runtime* runtime) {
         if (runtime->get_orch_built_on_host()) {
             DEV_INFO("Thread 3: Host orchestration mode, no-op");
         } else {
-            DEV_INFO("Thread 3: Device orchestration, calling aicpu_orchestration_entry");
-            aicpu_orchestration_entry(runtime->get_pto2_gm_sm_ptr(),
-                                      runtime->get_orch_args(),
-                                      runtime->get_orch_arg_count());
+            DEV_INFO("Thread 3: Device orchestration, loading and calling orchestration SO");
+
+            // Get device orchestration SO from runtime
+            const void* so_data = runtime->get_device_orch_so_data();
+            size_t so_size = runtime->get_device_orch_so_size();
+            if (so_data == nullptr || so_size == 0) {
+                DEV_ERROR("Thread 3: Device orchestration SO not provided");
+                return -1;
+            }
+
+            // Write SO to executable path that bypasses noexec restrictions on real AICPU
+            // /dev/shm, /tmp, and memfd are mounted noexec on real hardware
+            // Try multiple paths that may allow execution on AICPU
+            char so_path[256];
+            bool file_created = false;
+
+            // List of candidate paths to try (in order of preference)
+            const char* candidate_dirs[] = {
+                "/usr/lib64/aicpu_kernels/0/aicpu_kernels_device",
+                "/usr/lib64",
+                "/lib64",
+                "/var/tmp",
+                "/tmp"  // Fallback, may not work on some AICPU configurations
+            };
+            const int num_candidates = sizeof(candidate_dirs) / sizeof(candidate_dirs[0]);
+
+            for (int i = 0; i < num_candidates && !file_created; i++) {
+                snprintf(so_path, sizeof(so_path), "%s/libdevice_orch_%d.so",
+                         candidate_dirs[i], getpid());
+
+                std::ofstream file(so_path, std::ios::out | std::ios::binary);
+                if (!file) {
+                    DEV_INFO("Thread 3: Cannot create SO at %s (errno=%d), trying next path",
+                             so_path, errno);
+                    continue;
+                }
+                file.write(static_cast<const char*>(so_data), so_size);
+                if (!file) {
+                    DEV_INFO("Thread 3: Cannot write SO to %s (errno=%d), trying next path",
+                             so_path, errno);
+                    file.close();
+                    unlink(so_path);
+                    continue;
+                }
+                file.close();
+                file_created = true;
+                DEV_INFO("Thread 3: Created SO file at %s (%zu bytes)", so_path, so_size);
+            }
+
+            if (!file_created) {
+                DEV_ERROR("Thread 3: Failed to create SO file in any candidate path");
+                return -1;
+            }
+
+            // dlopen the SO
+            dlerror();  // Clear any existing error before dlopen
+            void* handle = dlopen(so_path, RTLD_LAZY | RTLD_LOCAL);
+            const char* dlopen_err = dlerror();
+            if (handle == nullptr) {
+                DEV_ERROR("Thread 3: dlopen failed: %s", dlopen_err ? dlopen_err : "unknown");
+                unlink(so_path);
+                return -1;
+            }
+            DEV_INFO("Thread 3: dlopen succeeded, handle=%p", handle);
+
+            dlerror();  // Clear any existing error before dlsym
+            DeviceOrchestrationFunc orch_func =
+                reinterpret_cast<DeviceOrchestrationFunc>(dlsym(handle, "aicpu_orchestration_entry"));
+            const char* dlsym_error = dlerror();
+            if (dlsym_error != nullptr) {
+                DEV_ERROR("Thread 3: dlsym failed: %s", dlsym_error);
+                dlclose(handle);
+                unlink(so_path);
+                return -1;
+            }
+            if (orch_func == nullptr) {
+                DEV_ERROR("Thread 3: dlsym returned NULL (no error)");
+                dlclose(handle);
+                unlink(so_path);
+                return -1;
+            }
+
+            DEV_INFO("Thread 3: Calling device orchestration function");
+            orch_func(runtime->get_pto2_gm_sm_ptr(),
+                      runtime->get_orch_args(),
+                      runtime->get_orch_arg_count());
+
+            dlclose(handle);
+            unlink(so_path);  // Cleanup temp SO file
+
             // Device mode: task count lives in PTO2 shared memory (current_task_index at offset 0)
             void* sm = runtime->get_pto2_gm_sm_ptr();
             int32_t pto2_task_count = sm ? *(volatile int32_t*)sm : 0;

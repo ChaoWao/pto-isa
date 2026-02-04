@@ -5,6 +5,7 @@
 
 #include "aicore/aicore.h"
 #include "common/core_type.h"
+#include "runtime.h"
 
 class Runtime;
 

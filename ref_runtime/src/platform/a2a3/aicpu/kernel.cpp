@@ -35,8 +35,8 @@ extern "C" __attribute__((visibility("default"))) int DynTileFwkBackendKernelSer
         return -1;
     }
     // Disable dlog on Init to avoid CANN dlog crash before runtime is ready.
-    // init_log_switch();
-    // DEV_INFO("%s", "Runtime Executor Init: Initializing AICPU kernel");
+    init_log_switch();
+    DEV_INFO("%s", "Runtime Executor Init: Initializing AICPU kernel");
     return 0;
 }
 
