@@ -311,11 +311,7 @@ class PTOCompiler:
                 "pto_shared_memory.c",
                 "pto_scheduler.c",
                 "pto_ring_buffer.c",
-                "pto_interval_tree.c",
                 "pto_tensormap.c",
-                "pto_logical_tensor.c",
-                "pto_worker.c",
-                "pto_runtime2_threaded_stub.c",
             ]
             for src in runtime_sources:
                 src_path = os.path.join(runtime_dir, src)

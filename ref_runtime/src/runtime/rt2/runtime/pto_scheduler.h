@@ -1,17 +1,17 @@
 /**
  * PTO Runtime2 - Scheduler Interface
- * 
+ *
  * The Scheduler is responsible for:
  * 1. Maintaining per-worker-type ready queues
  * 2. Tracking task state (PENDING -> READY -> RUNNING -> COMPLETED -> CONSUMED)
  * 3. Managing fanin/fanout refcounts for dependency resolution
  * 4. Advancing last_task_alive for heap reclamation
- * 
+ *
  * The Scheduler runs on Device AI_CPU and processes:
  * - Task state transitions based on fanin_refcount
  * - Buffer lifecycle based on fanout_refcount
  * - Ring pointer advancement for flow control
- * 
+ *
  * Based on: docs/runtime_buffer_manager_methods.md
  */
 
@@ -44,40 +44,40 @@ typedef struct {
 
 /**
  * Scheduler state structure (private to Scheduler)
- * 
+ *
  * Contains dynamic state updated during task execution.
  * Separated from shared memory for cache efficiency.
  */
 typedef struct PTO2SchedulerState {
     // Shared memory access
     PTO2SharedMemoryHandle* sm_handle;
-    
+
     // Local copies of ring pointers (written to shared memory after update)
     int32_t last_task_alive;      // Task ring tail
     int32_t heap_tail;            // Heap ring tail
-    
+
     // === DYNAMIC CONFIGURATION ===
     int32_t task_window_size;     // Task window size (power of 2)
     int32_t task_window_mask;     // task_window_size - 1 (for fast modulo)
-    
+
     // === PRIVATE DATA (not in shared memory) ===
-    
+
     // Per-task state arrays (dynamically allocated, indexed by task_id & task_window_mask)
     PTO2TaskState* task_state;        // PENDING/READY/RUNNING/COMPLETED/CONSUMED
     int32_t* fanin_refcount;          // Dynamic: counts completed producers
     int32_t* fanout_refcount;         // Dynamic: counts released references
-    
+
     // Ready queues (one per worker type)
     PTO2ReadyQueue ready_queues[PTO2_NUM_WORKER_TYPES];
-    
+
     // Dependency list pool reference
     PTO2DepListPool* dep_pool;
-    
+
     // Statistics
     int64_t tasks_completed;
     int64_t tasks_consumed;
     int64_t total_dispatch_cycles;
-    
+
 } PTO2SchedulerState;
 
 /**
@@ -94,13 +94,13 @@ static inline int32_t pto2_task_slot(PTO2SchedulerState* sched, int32_t task_id)
 
 /**
  * Initialize scheduler state
- * 
+ *
  * @param sched      Scheduler state to initialize
  * @param sm_handle  Shared memory handle
  * @param dep_pool   Dependency list pool
  * @return true on success
  */
-bool pto2_scheduler_init(PTO2SchedulerState* sched, 
+bool pto2_scheduler_init(PTO2SchedulerState* sched,
                           PTO2SharedMemoryHandle* sm_handle,
                           PTO2DepListPool* dep_pool);
 
@@ -173,7 +173,7 @@ static inline int32_t pto2_ready_queue_count(PTO2ReadyQueue* queue) {
 /**
  * Push task to ready queue with thread synchronization
  * Uses external mutex/cond from PTO2ThreadContext
- * 
+ *
  * @param queue       Ready queue
  * @param task_id     Task ID to push
  * @param mutex       External mutex protecting this queue
@@ -197,7 +197,7 @@ bool pto2_ready_queue_push_wake_min_clock(PTO2ReadyQueue* queue, int32_t task_id
 /**
  * Pop task from ready queue with thread synchronization
  * Blocks if queue is empty until task available or shutdown
- * 
+ *
  * @param queue       Ready queue
  * @param mutex       External mutex protecting this queue
  * @param cond        Condition variable to wait on
@@ -221,7 +221,7 @@ int32_t pto2_ready_queue_pop_with_yield_check(PTO2ReadyQueue* queue,
 
 /**
  * Try to pop task from ready queue without blocking
- * 
+ *
  * @param queue       Ready queue
  * @param mutex       External mutex protecting this queue
  * @return task_id, or -1 if queue is empty
@@ -245,9 +245,9 @@ bool pto2_ready_queue_empty_threadsafe(PTO2ReadyQueue* queue, pthread_mutex_t* m
 
 /**
  * Initialize task in scheduler (called when task is submitted)
- * 
+ *
  * Sets task state to PENDING or READY based on fanin_count.
- * 
+ *
  * @param sched   Scheduler state
  * @param task_id Task ID
  * @param task    Task descriptor (from shared memory)
@@ -257,10 +257,10 @@ void pto2_scheduler_init_task(PTO2SchedulerState* sched, int32_t task_id,
 
 /**
  * Check if task should transition to READY
- * 
+ *
  * Called after fanin_refcount is updated.
  * If fanin_refcount == fanin_count, moves task to READY and enqueues.
- * 
+ *
  * @param sched   Scheduler state
  * @param task_id Task ID
  * @param task    Task descriptor
@@ -275,12 +275,12 @@ void pto2_scheduler_mark_running(PTO2SchedulerState* sched, int32_t task_id);
 
 /**
  * Get next ready task from queue for worker type
- * 
+ *
  * @param sched       Scheduler state
  * @param worker_type Worker type to get task for
  * @return task_id, or -1 if no ready tasks
  */
-int32_t pto2_scheduler_get_ready_task(PTO2SchedulerState* sched, 
+int32_t pto2_scheduler_get_ready_task(PTO2SchedulerState* sched,
                                        PTO2WorkerType worker_type);
 
 // =============================================================================
@@ -289,13 +289,13 @@ int32_t pto2_scheduler_get_ready_task(PTO2SchedulerState* sched,
 
 /**
  * Handle task completion
- * 
+ *
  * Called by worker when task execution finishes:
  * 1. Sets task state to COMPLETED
  * 2. Updates fanin_refcount of all consumers (may make them READY)
  * 3. Updates fanout_refcount of all producers (may make them CONSUMED)
  * 4. Checks if this task can transition to CONSUMED
- * 
+ *
  * @param sched   Scheduler state
  * @param task_id Completed task ID
  */
@@ -303,22 +303,22 @@ void pto2_scheduler_on_task_complete(PTO2SchedulerState* sched, int32_t task_id)
 
 /**
  * Handle scope end (called when orchestrator ends a scope)
- * 
+ *
  * Increments fanout_refcount for all tasks in [begin_pos, end_pos).
  * May transition some tasks to CONSUMED.
- * 
+ *
  * @param sched     Scheduler state
  * @param begin_pos First task in scope (absolute ID)
  * @param end_pos   One past last task in scope (absolute ID)
  */
-void pto2_scheduler_on_scope_end(PTO2SchedulerState* sched, 
+void pto2_scheduler_on_scope_end(PTO2SchedulerState* sched,
                                   int32_t begin_pos, int32_t end_pos);
 
 /**
  * Increment fanout_refcount and check CONSUMED
- * 
+ *
  * Used when consumer completes or scope ends.
- * 
+ *
  * @param sched       Scheduler state
  * @param producer_id Producer task ID
  */
@@ -330,10 +330,10 @@ void pto2_scheduler_release_producer(PTO2SchedulerState* sched, int32_t producer
 
 /**
  * Advance last_task_alive and heap_tail
- * 
+ *
  * Called when a task transitions to CONSUMED.
  * Advances pointers if possible, updating shared memory.
- * 
+ *
  * @param sched Scheduler state
  */
 void pto2_scheduler_advance_ring_pointers(PTO2SchedulerState* sched);
@@ -355,56 +355,14 @@ bool pto2_scheduler_is_done(PTO2SchedulerState* sched);
 
 /**
  * Process new tasks from orchestrator
- * 
+ *
  * Checks current_task_index and initializes any new tasks.
  * Should be called periodically or when signaled by orchestrator.
- * 
+ *
  * @param sched Scheduler state
  * @return Number of new tasks processed
  */
 int32_t pto2_scheduler_process_new_tasks(PTO2SchedulerState* sched);
-
-// =============================================================================
-// Scheduler Thread Interface
-// =============================================================================
-
-/**
- * Scheduler thread main function
- * 
- * This is the entry point for the scheduler thread. It:
- * 1. Polls for new tasks from orchestrator
- * 2. Processes task completions from workers
- * 3. Updates dependency refcounts and enqueues ready tasks
- * 4. Advances ring pointers for flow control
- * 
- * @param arg Pointer to PTO2SchedulerContext
- * @return NULL
- */
-void* pto2_scheduler_thread_func(void* arg);
-
-/**
- * Process completions from workers
- * 
- * Reads completion queue and calls on_task_complete for each.
- * Updates refcounts and enqueues newly ready tasks.
- * 
- * @param ctx Scheduler context (includes thread context)
- * @return Number of completions processed
- */
-int32_t pto2_scheduler_process_completions(PTO2SchedulerContext* ctx);
-
-/**
- * Enqueue task to ready queue with thread-safe signaling
- * 
- * @param sched       Scheduler state
- * @param task_id     Task ID
- * @param worker_type Worker type
- * @param thread_ctx  Thread context for synchronization
- */
-void pto2_scheduler_enqueue_ready_threadsafe(PTO2SchedulerState* sched,
-                                              int32_t task_id,
-                                              PTO2WorkerType worker_type,
-                                              PTO2ThreadContext* thread_ctx);
 
 // =============================================================================
 // Debug Utilities
