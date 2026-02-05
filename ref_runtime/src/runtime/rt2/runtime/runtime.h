@@ -186,12 +186,9 @@ private:
   TensorPair tensor_pairs[RUNTIME_MAX_TENSOR_PAIRS];
   int tensor_pair_count;
 
-  // Device orchestration: when false, orchestration runs on device (thread 3)
-  bool orch_built_on_host_;
-  void* pto2_gm_sm_ptr_;   // GM pointer to PTO2 shared memory (device)
-  int32_t pto2_sm_size_;   // Size in bytes (set when allocating for host orchestrator)
-  void* pto2_gm_heap_ptr_; // GM heap for packed outputs (device), used when run_orchestrator_on_host
-  int32_t pto2_gm_heap_size_;
+  // Device orchestration: GM pointer to PTO2 shared memory (device)
+  void* pto2_gm_sm_ptr_;
+  int32_t pto2_sm_size_;   // Size in bytes
   int orch_arg_count_;
   uint64_t orch_args_storage_[RUNTIME_MAX_ARGS];  // Copy of args so device sees valid data after host buffer is gone
 
@@ -301,20 +298,15 @@ public:
     // Device orchestration (for AICPU thread 3)
     // =========================================================================
 
-    bool get_orch_built_on_host() const;
     void* get_pto2_gm_sm_ptr() const;
     uint64_t* get_orch_args() const;
     int get_orch_arg_count() const;
-    void set_orch_built_on_host(bool v);
     void set_pto2_gm_sm_ptr(void* p);
     void set_orch_args(uint64_t* args, int count);
 
-    /** PTO2 shared memory size in bytes (set when allocating; 0 if not set). For host mirror allocation. */
+    /** PTO2 shared memory size in bytes (set when allocating; 0 if not set). */
     int32_t get_pto2_sm_size() const { return pto2_sm_size_; }
     void set_pto2_sm_size(int32_t s) { pto2_sm_size_ = s; }
-    void* get_pto2_gm_heap_ptr() const { return pto2_gm_heap_ptr_; }
-    int32_t get_pto2_gm_heap_size() const { return pto2_gm_heap_size_; }
-    void set_pto2_gm_heap(void* p, int32_t size) { pto2_gm_heap_ptr_ = p; pto2_gm_heap_size_ = size; }
 
     uint64_t get_function_bin_addr(int func_id) const;
     void set_function_bin_addr(int func_id, uint64_t addr);

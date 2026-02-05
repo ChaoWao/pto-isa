@@ -83,7 +83,7 @@ export ASCEND_GLOBAL_LOG_LEVEL=0    # 0=DEBUG，便于看到 AICPU/KFC 等详细
 |------|----------|----------|
 | **host / aicpu / aicore 三个 binary** | `RuntimeBuilder.build()` → `BinaryCompiler.compile("aicore"|"aicpu"|"host")`，在 `/tmp/{aicore,aicpu,host}_build_*/` 下 CMake 构建，读入内存后目录删除 | 无异常且 `builder.build()` 返回的 `host_binary, aicpu_binary, aicore_binary` 均为非空 bytes |
 | **Incore .o（每个 kernel）** | `pto_compiler.compile_incore(source, core_type, pto_isa_root)` → 写 `/tmp/incore_{timestamp}_{pid}.o`，读入后删除 | 无异常且能拿到 `incore_o` bytes，随后 `extract_text_section(incore_o)` 成功 |
-| **Orchestration .so** | `pto_compiler.compile_orchestration(source, extra_include_dirs)` → 写 `/tmp/orch_{timestamp}_{pid}.so`，读入后删除 | 无异常且 `orch_so_binary` 非空；host 编排模式下该 SO 仅在 host 侧用于 `run_host_orchestration` 的逻辑，不通过 CANN 加载到设备 |
+| **Orchestration .so** | `pto_compiler.compile_orchestration(source, extra_include_dirs)` → 写 `/tmp/orch_{timestamp}_{pid}.so`，读入后删除 | 无异常且 `orch_so_binary` 非空；device 编排模式下该 SO 被拷贝到设备，由 AICPU thread 3 通过 dlopen 加载 |
 
 ### 如何确认「正常」
 
@@ -99,16 +99,15 @@ export ASCEND_GLOBAL_LOG_LEVEL=0    # 0=DEBUG，便于看到 AICPU/KFC 等详细
 
 ### 概念区分
 
-- **Orchestrator**：负责建图（写 task 列表、依赖等）。rt2 默认 **host orchestration**：在 host CPU 上执行，不把 orch SO 加载到设备。
+- **Orchestrator**：负责建图（写 task 列表、依赖等）。rt2 使用 **device orchestration**：在 AICPU thread 3 上执行，orchestration SO 被加载到设备上通过 dlopen 调用。
 - **Scheduler（及 AICPU worker）**：在 **libaicpu_kernel.so** 内（AICPU 侧代码），由 CANN 在 `launch_runtime` 时加载并执行。
 
 ### 代码路径
 
-**Orchestrator（host 编排）：**
+**Orchestrator（device 编排）：**
 
-- `runtime.initialize(..., run_orchestrator_on_host=True)` → C API `init_runtime` → `init_runtime_impl()`（`src/runtime/rt2/host/runtime_maker.cpp`）。
-- `run_orchestrator_on_host == true` 时：不加载 orch SO，只做 `runtime->set_orch_built_on_host(true)` 和 `set_orch_args()`。
-- 建图在 host 上通过 `runtime.run_host_orchestration(host_mirror)` 完成，写 task 到 host 侧 mirror，再拷到设备 PTO2 SM。
+- `runtime.initialize(...)` → C API `init_runtime` → `init_runtime_impl()`（`src/runtime/rt2/host/runtime_maker.cpp`）。
+- Device orchestration 模式下，orchestration SO 通过 `copy_orch_so()` 拷贝到设备，由 AICPU thread 3 通过 dlopen 加载并调用 `aicpu_orchestration_entry` 建图。
 
 **Scheduler（AICPU SO）：**
 
@@ -121,7 +120,7 @@ export ASCEND_GLOBAL_LOG_LEVEL=0    # 0=DEBUG，便于看到 AICPU/KFC 等详细
 ### 如何确认「正常」
 
 - 控制台应出现：
-  - `Host orchestration mode: orchestration will run on host CPU; use allocate_pto2_shared_memory and run_host_orchestration`
+  - `Device orchestration mode: AICPU thread 3 will build graph on device`
   - `DeviceRunner: wrote AICPU SO to <path> for CANN load`
   - `DeviceRunner: binaries loaded`
 - 若 AICPU 加载/执行失败，会在 `rtStreamSynchronize(stream_aicpu_)` 报错（如 507018 aicpu exception），见第 4 节。
@@ -150,16 +149,14 @@ export ASCEND_GLOBAL_LOG_LEVEL=0    # 0=DEBUG，便于看到 AICPU/KFC 等详细
 
 ## 4) 拉起 Orchestrator、Scheduler、Worker 是否正常
 
-### 顺序（host orchestration）
+### 顺序（device orchestration）
 
-1. **Host 侧**：`allocate_pto2_shared_memory()` 分配设备侧 SM；`run_host_orchestration(host_mirror)` 在 host 上跑编排，把 task 写入 host mirror，再拷贝到设备 SM。
-2. **设备侧**：`launch_runtime()` → `DeviceRunner::run()`：
+1. **Device 侧**：`launch_runtime()` → `DeviceRunner::run()`：
    - `ensure_device_initialized()`：写 `libaicpu_kernel.so`、AICPU SO 拷到设备、初始化 device args。
-   - 设置每个 task 的 `function_bin_addr`（见第 3 节）。
    - `kernel_args_.init_runtime_args(runtime, mem_alloc_)`：Runtime 等结构拷到设备。
    - `launch_aicpu_kernel(..., "DynTileFwkBackendKernelServerInit", 1)`：AICPU 初始化。
    - `rtStreamSynchronize(stream_aicpu_)`：若此处失败（如 **507018 aicpu exception**），说明 AICPU 侧执行异常（SO 加载、入口或参数问题）。
-   - `launch_aicpu_kernel(..., "DynTileFwkBackendKernelServer", aicpu_thread_num)`：启动 Scheduler + 3 个 AICPU worker。
+   - `launch_aicpu_kernel(..., "DynTileFwkBackendKernelServer", aicpu_thread_num)`：启动 4 个 AICPU 线程（3 scheduler + 1 orchestrator）。Thread 3 作为 orchestrator 通过 dlopen 加载 orchestration SO 并建图。
    - `launch_aicore_kernel(...)`：启动 AICore 侧 kernel。
    - 再次 `rtStreamSynchronize(stream_aicpu_)`、`rtStreamSynchronize(stream_aicore_)`。
 
@@ -180,7 +177,7 @@ export ASCEND_GLOBAL_LOG_LEVEL=0    # 0=DEBUG，便于看到 AICPU/KFC 等详细
 | 检查项 | 关键代码/日志 | 正常标志 |
 |--------|----------------|----------|
 | 1) .o/.so 生成 | `builder.build()`、`compile_incore`、`compile_orchestration` | 无异常，各 binary 非空，有对应编译日志 |
-| 2) Orchestrator/Scheduler 加载 | `init_runtime_impl`（host 编排不加载 orch SO）、`ensure_binaries_loaded` | Host 编排提示、`wrote AICPU SO`、`binaries loaded` |
+| 2) Orchestrator/Scheduler 加载 | `init_runtime_impl`、`ensure_binaries_loaded` | Device 编排提示、`wrote AICPU SO`、`binaries loaded` |
 | 3) Incore 加载 | `register_kernel`、`get_function_bin_addr` | 每个 func_id 有 `function_bin_addr=0x...`，Setting 阶段无 Warning |
 | 4) 拉起 orch/scheduler/worker | `launch_aicpu_kernel`（Init + Main）、`launch_aicore_kernel`、`rtStreamSynchronize` | `AICPU Init kernel completed OK`、无 507018、`Launch completed successfully` |
 

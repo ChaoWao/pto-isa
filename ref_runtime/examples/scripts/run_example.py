@@ -20,14 +20,6 @@ Examples:
     python examples/scripts/run_example.py -k examples/easyexample/kernels \\
         -g examples/easyexample/golden.py -r rt2 -p a2a3sim
 
-    # rt2 + host orchestration (default: graph built on host CPU)
-    python examples/scripts/run_example.py -k examples/easyexample/kernels \\
-        -g examples/easyexample/golden.py -r rt2 -p a2a3sim
-
-    # rt2 + device orchestration (orchestrator on AICPU thread 3)
-    python examples/scripts/run_example.py -k examples/easyexample/kernels \\
-        -g examples/easyexample/golden.py -r rt2 -p a2a3sim --orchestrator device_aicpu
-
     # Run with specific device
     python examples/scripts/run_example.py -k ./kernels -g ./golden.py -r rt2 -d 0 -p a2a3
 
@@ -100,19 +92,6 @@ Golden.py interface:
     )
 
     parser.add_argument(
-        "-u", "--use-device-orchestration",
-        action="store_true",
-        help="(Deprecated) Equivalent to --orchestrator device_aicpu. Kept for backward compatibility."
-    )
-
-    parser.add_argument(
-        "--orchestrator",
-        choices=["host_cpu", "device_aicpu"],
-        default="device_aicpu",
-        help="With -r rt2: run orchestrator on host CPU (host_cpu) or on AICPU thread 3 (device_aicpu). Default: device_aicpu. Ignored for other runtimes."
-    )
-
-    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose output"
@@ -155,12 +134,6 @@ Golden.py interface:
         print(f"Error: kernel_config.py not found in {kernels_path}")
         return 1
 
-    # Orchestrator location for rt2.
-    # Both a2a3 (real hardware) and a2a3sim (simulation) support device_aicpu orchestration.
-    orchestrator = args.orchestrator
-    if getattr(args, "use_device_orchestration", False):
-        orchestrator = "device_aicpu"
-
     # Import and run
     try:
         from code_runner import CodeRunner
@@ -171,8 +144,6 @@ Golden.py interface:
             runtime_name=args.runtime,
             device_id=args.device,
             platform=args.platform,
-            use_device_orchestration=getattr(args, "use_device_orchestration", False),
-            orchestrator_location=orchestrator,
             keep_artifacts_dir=args.keep_artifacts,
         )
 

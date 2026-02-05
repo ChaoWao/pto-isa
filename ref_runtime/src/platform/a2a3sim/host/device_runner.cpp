@@ -205,16 +205,6 @@ int DeviceRunner::run(Runtime& runtime,
                       << kv.second.func_addr << std::dec << '\n';
         }
         std::cout << "  (PTO2 dispatch, " << func_id_to_addr_.size() << " kernels)\n";
-    } else if (runtime.get_orch_built_on_host()) {
-        for (int i = 0; i < runtime.get_task_count(); i++) {
-            Task* task = runtime.get_task(i);
-            if (task != nullptr) {
-                uint64_t addr = get_function_bin_addr(task->func_id);
-                task->function_bin_addr = addr;
-                std::cout << "  Task " << i << " (func_id=" << task->func_id
-                          << ") -> function_bin_addr=0x" << std::hex << addr << std::dec << '\n';
-            }
-        }
     }
     std::cout << '\n';
 

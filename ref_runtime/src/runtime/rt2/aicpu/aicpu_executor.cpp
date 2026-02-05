@@ -178,17 +178,11 @@ int AicpuExecutor::init(Runtime* runtime) {
     }
 
     // Initialize runtime execution state
-    // Host orchestration: task count is in SM (already copied from host). Device: set later by Thread 3.
-    if (runtime->get_orch_built_on_host() && runtime->get_pto2_gm_sm_ptr()) {
-        int32_t pto2_count = *static_cast<const volatile int32_t*>(runtime->get_pto2_gm_sm_ptr());
-        total_tasks_.store(pto2_count > 0 ? pto2_count : runtime->get_task_count(),
-                          std::memory_order_release);
-    } else {
-        total_tasks_.store(runtime->get_task_count(), std::memory_order_release);
-    }
+    // Device orchestration: task count set later by Thread 3 after graph is built
+    total_tasks_.store(runtime->get_task_count(), std::memory_order_release);
     completed_tasks_.store(0, std::memory_order_release);
-    // Host orchestration: graph already built, no wait needed. Device orch: Thread 3 will set this.
-    orchestrator_done_.store(runtime->get_orch_built_on_host(), std::memory_order_release);
+    // Device orchestration: Thread 3 will set this after graph is built
+    orchestrator_done_.store(false, std::memory_order_release);
 
     int initial_ready[RUNTIME_MAX_TASKS];
     int initial_count = runtime->get_initial_ready_tasks(initial_ready);
@@ -567,10 +561,7 @@ int AicpuExecutor::run(Runtime* runtime) {
 
     // Thread 3 when 4 AICPU threads: orchestrator (no cores)
     if (thread_num_ == 4 && thread_idx == 3) {
-        if (runtime->get_orch_built_on_host()) {
-            DEV_INFO("Thread 3: Host orchestration mode, no-op");
-        } else {
-            DEV_INFO("Thread 3: Device orchestration, loading and calling orchestration SO");
+        DEV_INFO("Thread 3: Device orchestration, loading and calling orchestration SO");
 
             // Get device orchestration SO from runtime
             const void* so_data = runtime->get_device_orch_so_data();
@@ -668,11 +659,11 @@ int AicpuExecutor::run(Runtime* runtime) {
             pto2_init_done_.store(false, std::memory_order_release);
             pto2_init_complete_.store(false, std::memory_order_release);  // so workers re-init and wait this run
             orchestrator_done_.store(true, std::memory_order_release);
-        }
+
         DEV_INFO("Thread 3: Orchestrator completed");
     } else {
         // Device orchestration: wait until Thread 3 has built the graph
-        if (thread_num_ == 4 && !runtime->get_orch_built_on_host()) {
+        if (thread_num_ == 4) {
             while (!orchestrator_done_.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }

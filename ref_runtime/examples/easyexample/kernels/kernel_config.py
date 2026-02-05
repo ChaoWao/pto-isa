@@ -15,9 +15,6 @@ _KERNELS_ROOT = Path(__file__).parent
 ORCHESTRATION = {
     "source": str(_KERNELS_ROOT / "orchestration" / "example_aicpu_orchestration_entry_skeleton.cpp"),
     "function_name": "aicpu_orchestration_entry",
-    # Host orchestration uses different file
-    "host_source": str(_KERNELS_ROOT.parent.parent.parent / "src" / "runtime" / "rt2" / "host" / "example_host_orchestration_entry.cpp"),
-    "host_function_name": "host_orchestration_entry",
 }
 
 # Kernel configs
