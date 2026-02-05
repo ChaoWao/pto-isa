@@ -182,10 +182,6 @@ private:
     Task tasks[RUNTIME_MAX_TASKS];  // Fixed-size task array
     int next_task_id;               // Next available task ID
 
-    // Initial ready tasks (computed once, read-only after)
-    int initial_ready_tasks[RUNTIME_MAX_TASKS];
-    int initial_ready_count;
-
   // Tensor pairs for host-device memory tracking
   TensorPair tensor_pairs[RUNTIME_MAX_TENSOR_PAIRS];
   int tensor_pair_count;
@@ -196,12 +192,9 @@ private:
   int32_t pto2_sm_size_;   // Size in bytes (set when allocating for host orchestrator)
   void* pto2_gm_heap_ptr_; // GM heap for packed outputs (device), used when run_orchestrator_on_host
   int32_t pto2_gm_heap_size_;
-  uint64_t* orch_args_;   // Arguments for device orchestration (points to orch_args_storage_ after set)
   int orch_arg_count_;
   uint64_t orch_args_storage_[RUNTIME_MAX_ARGS];  // Copy of args so device sees valid data after host buffer is gone
 
-  // Device mode: dispatch from PTO2 shared memory; Handshake.task = PTO2DispatchPayload*
-  bool use_pto2_dispatch_;
   uint64_t func_id_to_addr_[RUNTIME_MAX_FUNC_ID];  // kernel_id -> GM function_bin_addr
 
   // Device orchestration SO (binary data passed from host, loaded via dlopen by AICPU)
@@ -273,17 +266,6 @@ public:
     int get_initial_ready_tasks(int *ready_tasks);
 
     // =========================================================================
-    // Utility Methods
-    // =========================================================================
-
-    /**
-     * Print the runtime structure to stdout
-     *
-     * Shows task table with fanin/fanout information.
-     */
-    void print_runtime() const;
-
-    // =========================================================================
     // Tensor Pair Management
     // =========================================================================
 
@@ -334,8 +316,6 @@ public:
     int32_t get_pto2_gm_heap_size() const { return pto2_gm_heap_size_; }
     void set_pto2_gm_heap(void* p, int32_t size) { pto2_gm_heap_ptr_ = p; pto2_gm_heap_size_ = size; }
 
-    bool get_use_pto2_dispatch() const;
-    void set_use_pto2_dispatch(bool v);
     uint64_t get_function_bin_addr(int func_id) const;
     void set_function_bin_addr(int func_id, uint64_t addr);
 

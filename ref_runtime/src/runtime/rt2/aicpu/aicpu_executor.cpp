@@ -66,7 +66,6 @@ struct AicpuExecutor {
     // ===== Methods =====
     int init(Runtime* runtime);
     int hank_aicore(Runtime* runtime, int thread_idx, const int* cur_thread_cores, int core_num);
-    int resolve_and_dispatch(Runtime& runtime, int thread_idx, const int* cur_thread_cores, int core_num);
     int resolve_and_dispatch_pto2(Runtime* runtime, int thread_idx, const int* cur_thread_cores, int core_num);
     int shutdown_aicore(Runtime* runtime, int thread_idx, const int* cur_thread_cores, int core_num);
     int run(Runtime* runtime);
@@ -263,199 +262,6 @@ int AicpuExecutor::shutdown_aicore(Runtime* runtime, int thread_idx, const int* 
     }
     DEV_INFO("Thread %d: Shutdown complete", thread_idx);
     return 0;
-}
-
-/**
- * Resolve dependencies and dispatch tasks using polling-based dispatch to
- * AICore
- */
-int AicpuExecutor::resolve_and_dispatch(Runtime& runtime, int thread_idx, const int* cur_thread_cores, int core_num) {
-    Handshake* hank = (Handshake*)runtime.workers;
-
-    DEV_INFO("Thread %d: Starting execution with %d cores", thread_idx, core_num);
-
-    int cur_thread_completed = 0;
-    int cur_thread_tasks_in_flight = 0;
-    int task_count = total_tasks_.load(std::memory_order_acquire);
-
-    // Timeout detection using idle iteration counting
-    int idle_iterations = 0;
-    const int MAX_IDLE_ITERATIONS = 1000000;
-    const int WARN_INTERVAL = 100000;
-    bool made_progress = false;
-
-    int verification_warning_count = 0;
-    const int MAX_VERIFICATION_WARNINGS = 10;
-
-    // Execute tasks using polling-based dispatch with integrated verification
-    while (true) {
-        // Double verification: check counter reached AND all cores truly idle
-        if (completed_tasks_.load(std::memory_order_acquire) >= task_count) {
-            bool all_cores_idle = true;
-
-            for (int i = 0; i < core_num; i++) {
-                int core_id = cur_thread_cores[i];
-                Handshake* h = &hank[core_id];
-
-                if (h->task_status != 0 || h->task != 0) {
-                    all_cores_idle = false;
-
-                    if (verification_warning_count == 0) {
-                        DEV_WARN("Thread %d: Counter reached %d/%d but core %d still has work (status=%d, task=%p)",
-                                thread_idx, completed_tasks_.load(std::memory_order_acquire), task_count,
-                                core_id, h->task_status, (void*)h->task);
-                    }
-                    break;
-                }
-            }
-
-            if (all_cores_idle) {
-                // Exit only when orchestration is done AND no remaining tasks
-                if (!orchestrator_done_.load(std::memory_order_acquire)) {
-                    // Orchestration not done yet, keep waiting
-                } else {
-                    int aic_remaining = ready_count_aic_.load(std::memory_order_acquire);
-                    int aiv_remaining = ready_count_aiv_.load(std::memory_order_acquire);
-                    if (aic_remaining > 0 || aiv_remaining > 0) {
-                        DEV_WARN("Thread %d: Queues not empty after completion! AIC=%d, AIV=%d",
-                                thread_idx, aic_remaining, aiv_remaining);
-                    }
-                    break;  // Exit main loop: orch done and no remaining work
-                }
-            }
-
-            // Counter reached but cores still working, continue main loop to process them
-            verification_warning_count++;
-            if (verification_warning_count > MAX_VERIFICATION_WARNINGS) {
-                DEV_ERROR("Thread %d: Counter reached but cores still working after %d checks!",
-                         thread_idx, verification_warning_count);
-                diagnose_stuck_state(runtime, thread_idx, cur_thread_cores, core_num, hank);
-                return -1;
-            }
-        }
-
-        made_progress = false;
-
-        // Phase 1: Process completed tasks on my managed cores
-        for (int i = 0; i < core_num; i++) {
-            int core_id = cur_thread_cores[i];
-            Handshake* h = &hank[core_id];
-
-            // Core finished a task (idle + task not null)
-            if (h->task_status == 0 && h->task != 0) {
-                // Get completed task and immediately clear the pointer to prevent duplicate detection
-                Task* task = reinterpret_cast<Task*>(h->task);
-                h->task = 0;  // Clear immediately to minimize race condition window
-
-                int task_id = task->task_id;
-
-                DEV_INFO("Thread %d: Core %d completed task %d", thread_idx, core_id, task_id);
-
-                // Update fanin of successors atomically and add to appropriate
-                // shared ready queue
-                for (int j = 0; j < task->fanout_count; j++) {
-                    int dep_id = task->fanout[j];
-                    Task* dep = runtime.get_task(dep_id);
-
-                    // Atomic decrement fanin
-                    int prev_fanin = dep->fanin.fetch_sub(1, std::memory_order_acq_rel);
-
-                    // Dependency resolved, add to appropriate shared ready
-                    // queue
-                    if (prev_fanin == 1) {
-                        if (dep->core_type == CoreType::AIC) {  // AIC task
-                            std::lock_guard<std::mutex> lock(ready_queue_aic_mutex_);
-                            int idx = ready_count_aic_.load(std::memory_order_relaxed);
-                            ready_queue_aic_[idx] = dep_id;
-                            ready_count_aic_.fetch_add(1, std::memory_order_release);
-                            DEV_INFO("Thread %d: Task %d became ready -> AIC queue", thread_idx, dep_id);
-                        } else {  // AIV task
-                            std::lock_guard<std::mutex> lock(ready_queue_aiv_mutex_);
-                            int idx = ready_count_aiv_.load(std::memory_order_relaxed);
-                            ready_queue_aiv_[idx] = dep_id;
-                            ready_count_aiv_.fetch_add(1, std::memory_order_release);
-                            DEV_INFO("Thread %d: Task %d became ready -> AIV queue", thread_idx, dep_id);
-                        }
-                    }
-                }
-
-                // Update counters
-                cur_thread_tasks_in_flight--;
-                cur_thread_completed++;
-                made_progress = true;
-                completed_tasks_.fetch_add(1, std::memory_order_release);
-            }
-        }
-
-        // Load balancing: Skip dispatch if all my cores are busy
-        if (cur_thread_tasks_in_flight < core_num) {
-            // Phase 2: Dispatch new tasks from matching ready queue to idle cores
-            for (int i = 0; i < core_num; i++) {
-                int core_id = cur_thread_cores[i];
-                Handshake* h = &hank[core_id];
-
-                // Core is idle and available (idle + task is null)
-                if (h->task_status == 0 && h->task == 0) {
-                    // Dispatch from matching queue based on core type
-                    if (h->core_type == CoreType::AIC) {  // AIC core
-                        if (ready_count_aic_.load(std::memory_order_acquire) > 0) {
-                            std::lock_guard<std::mutex> lock(ready_queue_aic_mutex_);
-                            int count = ready_count_aic_.load(std::memory_order_relaxed);
-                            if (count > 0) {
-                                ready_count_aic_.fetch_sub(1, std::memory_order_release);
-                                int task_id = ready_queue_aic_[count - 1];
-                                Task* task = runtime.get_task(task_id);
-
-                                DEV_INFO("Thread %d: Dispatching AIC task %d to core %d", thread_idx, task_id, core_id);
-
-                                h->task = reinterpret_cast<uint64_t>(task);
-                                h->task_status = 1;  // Mark as busy
-                                cur_thread_tasks_in_flight++;
-                                made_progress = true;
-                            }
-                        }
-                    } else if (h->core_type == CoreType::AIV) {  // AIV core
-                        if (ready_count_aiv_.load(std::memory_order_acquire) > 0) {
-                            std::lock_guard<std::mutex> lock(ready_queue_aiv_mutex_);
-                            int count = ready_count_aiv_.load(std::memory_order_relaxed);
-                            if (count > 0) {
-                                ready_count_aiv_.fetch_sub(1, std::memory_order_release);
-                                int task_id = ready_queue_aiv_[count - 1];
-                                Task* task = runtime.get_task(task_id);
-
-                                DEV_INFO("Thread %d: Dispatching AIV task %d to core %d", thread_idx, task_id, core_id);
-
-                                h->task = reinterpret_cast<uint64_t>(task);
-                                h->task_status = 1;  // Mark as busy
-                                cur_thread_tasks_in_flight++;
-                                made_progress = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Timeout detection: track idle iterations when no progress
-        if (!made_progress) {
-            idle_iterations++;
-            if (idle_iterations % WARN_INTERVAL == 0) {
-                int current = completed_tasks_.load(std::memory_order_acquire);
-                DEV_WARN("Thread %d: %d idle iterations, progress %d/%d tasks",
-                        thread_idx, idle_iterations, current, task_count);
-            }
-            if (idle_iterations > MAX_IDLE_ITERATIONS) {
-                DEV_ERROR("Thread %d: Timeout after %d idle iterations!", thread_idx, idle_iterations);
-                diagnose_stuck_state(runtime, thread_idx, cur_thread_cores, core_num, hank);
-                return -1;
-            }
-        } else {
-            idle_iterations = 0;
-        }
-    }
-
-    DEV_INFO("Thread %d: Execution complete, completed %d tasks", thread_idx, cur_thread_completed);
-    return cur_thread_completed;
 }
 
 // Build PTO2DispatchPayload from PTO2TaskDescriptor.
@@ -877,9 +683,7 @@ int AicpuExecutor::run(Runtime* runtime) {
         }
 
         DEV_INFO("Thread %d: Runtime has %d tasks", thread_idx, runtime->get_task_count());
-        int completed = runtime->get_use_pto2_dispatch()
-            ? resolve_and_dispatch_pto2(runtime, thread_idx, cur_thread_cores, my_cores)
-            : resolve_and_dispatch(*runtime, thread_idx, cur_thread_cores, my_cores);
+        int completed = resolve_and_dispatch_pto2(runtime, thread_idx, cur_thread_cores, my_cores);
         DEV_INFO("Thread %d: Executed %d tasks from runtime", thread_idx, completed);
 
         rc = shutdown_aicore(runtime, thread_idx, cur_thread_cores, my_cores);

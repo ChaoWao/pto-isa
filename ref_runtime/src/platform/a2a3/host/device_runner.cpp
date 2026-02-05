@@ -339,7 +339,6 @@ int DeviceRunner::run(Runtime& runtime,
         // PTO2 dispatch mode: copy func_id_to_addr_ to Runtime::func_id_to_addr_[]
         // This is required because AICPU Scheduler calls runtime->get_function_bin_addr()
         // in build_pto2_payload() to get kernel addresses for device orchestration
-        runtime.set_use_pto2_dispatch(true);
         for (const auto& kv : func_id_to_addr_) {
             runtime.set_function_bin_addr(kv.first, kv.second);
             std::cout << "  func_id=" << kv.first << " -> function_bin_addr=0x"

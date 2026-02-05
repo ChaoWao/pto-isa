@@ -30,7 +30,6 @@ Runtime::Runtime() {
         memset(tasks[i].fanout, 0, sizeof(tasks[i].fanout));
     }
     next_task_id = 0;
-    initial_ready_count = 0;
     worker_count = 0;
     block_dim = 0;
     sche_cpu_num = 1;
@@ -40,9 +39,7 @@ Runtime::Runtime() {
     pto2_sm_size_ = 0;
     pto2_gm_heap_ptr_ = nullptr;
     pto2_gm_heap_size_ = 0;
-    orch_args_ = nullptr;
     orch_arg_count_ = 0;
-    use_pto2_dispatch_ = true;  // default true
     for (int i = 0; i < RUNTIME_MAX_FUNC_ID; i++) {
         func_id_to_addr_[i] = 0;
     }
@@ -125,77 +122,16 @@ Task* Runtime::get_task(int task_id) {
 int Runtime::get_task_count() const { return next_task_id; }
 
 int Runtime::get_initial_ready_tasks(int* ready_tasks) {
-    initial_ready_count = 0;
+    int count = 0;
     for (int i = 0; i < next_task_id; i++) {
         if (tasks[i].fanin == 0) {
-            initial_ready_tasks[initial_ready_count] = i;
             if (ready_tasks != nullptr) {
-                ready_tasks[initial_ready_count] = i;
+                ready_tasks[count] = i;
             }
-            initial_ready_count++;
+            count++;
         }
     }
-    return initial_ready_count;
-}
-
-// =============================================================================
-// Utility Methods
-// =============================================================================
-
-void Runtime::print_runtime() const {
-    printf(
-        "\n===================================================================="
-        "============\n");
-    printf("[Runtime] Task Runtime Status\n");
-    printf(
-        "======================================================================"
-        "==========\n");
-    printf("  Total tasks: %d\n", next_task_id);
-
-    // Print initially ready tasks
-    printf("\nInitially Ready Tasks (fanin==0):\n");
-    printf(
-        "----------------------------------------------------------------------"
-        "----------\n");
-    printf("  ");
-    int ready_count = 0;
-    for (int i = 0; i < next_task_id; i++) {
-        if (tasks[i].fanin.load() == 0) {
-            if (ready_count > 0) printf(", ");
-            printf("%d", i);
-            ready_count++;
-        }
-    }
-    if (ready_count == 0) {
-        printf("(none)");
-    }
-    printf("\n  Count: %d\n", ready_count);
-
-    printf("\nTask Table:\n");
-    printf(
-        "----------------------------------------------------------------------"
-        "----------\n");
-
-    for (int i = 0; i < next_task_id; i++) {
-        const Task* t = &tasks[i];
-
-        printf("  Task %d: func_id=%d, fanin=%d, fanout=%d, args=%d [",
-            i,
-            t->func_id,
-            t->fanin.load(),
-            t->fanout_count,
-            t->num_args);
-
-        // Print fanout list
-        for (int j = 0; j < t->fanout_count; j++) {
-            printf("%d%s", t->fanout[j], j < t->fanout_count - 1 ? "," : "");
-        }
-        printf("]\n");
-    }
-
-    printf(
-        "======================================================================"
-        "==========\n\n");
+    return count;
 }
 
 // =============================================================================
@@ -243,14 +179,8 @@ void Runtime::set_orch_args(uint64_t* args, int count) {
     orch_arg_count_ = count <= RUNTIME_MAX_ARGS ? count : RUNTIME_MAX_ARGS;
     if (args && orch_arg_count_ > 0) {
         memcpy(orch_args_storage_, args, (size_t)orch_arg_count_ * sizeof(uint64_t));
-        orch_args_ = orch_args_storage_;
-    } else {
-        orch_args_ = nullptr;
     }
 }
-
-bool Runtime::get_use_pto2_dispatch() const { return use_pto2_dispatch_; }
-void Runtime::set_use_pto2_dispatch(bool v) { use_pto2_dispatch_ = v; }
 
 uint64_t Runtime::get_function_bin_addr(int func_id) const {
     if (func_id < 0 || func_id >= RUNTIME_MAX_FUNC_ID) return 0;

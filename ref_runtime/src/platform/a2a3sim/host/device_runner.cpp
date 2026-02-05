@@ -199,7 +199,6 @@ int DeviceRunner::run(Runtime& runtime,
     std::cout << "\n=== Setting function_bin_addr for Tasks (Simulation) ===" << '\n';
     bool use_pto2 = (runtime.get_pto2_gm_sm_ptr() != nullptr);
     if (use_pto2) {
-        runtime.set_use_pto2_dispatch(true);
         for (const auto& kv : func_id_to_addr_) {
             runtime.set_function_bin_addr(kv.first, kv.second.func_addr);
             std::cout << "  func_id=" << kv.first << " -> function_bin_addr=0x" << std::hex
